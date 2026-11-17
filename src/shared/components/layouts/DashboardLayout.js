@@ -1,122 +1,63 @@
 "use client";
-
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { usePathname } from "next/navigation";
+import ThemeToggle from "../ThemeToggle";
+import { TokYardMark, YardIcon } from "../TokYard";
 import { useNotificationStore } from "@/store/notificationStore";
-import Sidebar from "../Sidebar";
-import Header from "../Header";
-
-function getToastStyle(type) {
-  if (type === "success") {
-    return {
-      wrapper: "border-green-500/30 bg-green-500/10 text-green-600 dark:text-green-400",
-      icon: "check_circle",
-    };
-  }
-  if (type === "error") {
-    return {
-      wrapper: "border-red-500/30 bg-red-500/10 text-red-600 dark:text-red-400",
-      icon: "error",
-    };
-  }
-  if (type === "warning") {
-    return {
-      wrapper: "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-      icon: "warning",
-    };
-  }
-  return {
-    wrapper: "border-blue-500/30 bg-blue-500/10 text-blue-600 dark:text-blue-400",
-    icon: "info",
-  };
-}
 
 export default function DashboardLayout({ children }) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname();
-  const notifications = useNotificationStore((state) => state.notifications);
-  const removeNotification = useNotificationStore((state) => state.removeNotification);
-
-  // Preload heavy usage charts in background when browser is idle
+  const [auth, setAuth] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [hash, setHash] = useState("");
+  const notifications = useNotificationStore(s => s.notifications);
+  const remove = useNotificationStore(s => s.removeNotification);
   useEffect(() => {
-    const preload = () => {
-      import("@/shared/components/UsageStats").catch(() => {});
-      import("@/app/(dashboard)/dashboard/usage/components/UsageChart").catch(() => {});
-      import("@/app/(dashboard)/dashboard/usage/components/ProviderBarChart").catch(() => {});
-      import("@/app/(dashboard)/dashboard/usage/components/TopModelsChart").catch(() => {});
-    };
-    if (typeof window !== "undefined") {
-      if ("requestIdleCallback" in window) {
-        const id = window.requestIdleCallback(preload, { timeout: 4000 });
-        return () => window.cancelIdleCallback(id);
-      }
-      const timer = setTimeout(preload, 2500);
-      return () => clearTimeout(timer);
-    }
+    fetch("/api/auth/status", { cache: "no-store" }).then(r => r.json()).then(setAuth).catch(() => {});
+    const update = () => { setHash(location.hash); setOpen(false); };
+    update(); window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
   }, []);
-
-  return (
-    <div className="flex h-screen w-full overflow-hidden bg-bg">
-      <div className="fixed top-4 right-4 z-[80] flex w-[min(92vw,380px)] flex-col gap-2">
-        {notifications.map((n) => {
-          const style = getToastStyle(n.type);
-          return (
-            <div
-              key={n.id}
-              className={`rounded-lg border px-3 py-2 shadow-lg backdrop-blur-sm ${style.wrapper}`}
-            >
-              <div className="flex items-start gap-2">
-                <span className="material-symbols-outlined text-[18px] leading-5">{style.icon}</span>
-                <div className="min-w-0 flex-1">
-                  {n.title ? <p className="text-xs font-semibold mb-0.5">{n.title}</p> : null}
-                  <p className="text-xs whitespace-pre-wrap break-words">{n.message}</p>
-                </div>
-                {n.dismissible ? (
-                  <button
-                    type="button"
-                    onClick={() => removeNotification(n.id)}
-                    className="text-current/70 hover:text-current"
-                    aria-label="Dismiss notification"
-                  >
-                    <span className="material-symbols-outlined text-[16px]">close</span>
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          );
-        })}
+  useEffect(() => { setOpen(false); }, [pathname]);
+  useEffect(() => {
+    if (!open) return;
+    const close = e => { if (e.key === "Escape") setOpen(false); };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [open]);
+  const admin = auth?.role === "admin";
+  const nav = [
+    { href: "/dashboard", label: admin ? "People & quotas" : "My workspace", icon: "people" },
+    ...(admin ? [
+      { href: "/dashboard#profiles", label: "Profiles", icon: "profiles" },
+      { href: "/dashboard#activity", label: "Activity", icon: "activity" },
+      { href: "/dashboard/providers", label: "Connections", icon: "connections" },
+      { href: "/dashboard/endpoint", label: "Gateway", icon: "key" },
+      { href: "/dashboard/profile", label: "Settings", icon: "settings" },
+    ] : []),
+  ];
+  const active = href => href.includes("#") ? pathname === "/dashboard" && hash === href.slice(href.indexOf("#")) : pathname === href && (href !== "/dashboard" || !hash);
+  const current = nav.find(n => active(n.href))?.label || (pathname.includes("support") ? "Support TokYard" : "Gateway workspace");
+  return <div className="yard-shell">
+    <a className="yard-skip" href="#yard-main">Skip to content</a>
+    {open && <button className="yard-backdrop" aria-label="Close navigation" onClick={() => setOpen(false)}/>}
+    <aside className={`yard-sidebar ${open ? "is-open" : ""}`} aria-label="Workspace navigation">
+      <Link href="/dashboard" className="yard-brand"><TokYardMark/><span>TokYard<span className="yard-brand-note">AI access, in balance.</span></span></Link>
+      <div className="yard-workspace-tag"><span className="yard-dot"/><span>Personal workspace</span><span className="yard-tag">α</span></div>
+      <div className="yard-nav-label">WORKSPACE</div>
+      <nav>{nav.map(item => <Link key={item.href} href={item.href} className={`yard-nav-link ${active(item.href) ? "active" : ""}`} onClick={() => setOpen(false)} aria-current={active(item.href) ? "page" : undefined}><YardIcon name={item.icon}/>{item.label}</Link>)}</nav>
+      <div className="yard-sidebar-bottom">
+        <div className="yard-open-source"><span className="yard-dot"/>Open source. Shared possibility.</div>
+        <Link href="/dashboard/support" className={`yard-nav-link ${pathname.includes("support") ? "active" : ""}`}><YardIcon name="support"/>Support TokYard</Link>
+        <a href="https://github.com/Operalith/tokyard" target="_blank" rel="noreferrer" className="yard-repo-link">Operalith / tokyard <span>↗</span></a>
+        <div className="yard-account"><span className="yard-avatar">{admin ? "O" : (auth?.displayName || "M").slice(0, 1).toUpperCase()}</span><div><strong>{admin ? "Workspace owner" : auth?.displayName || "Member"}</strong><small>{admin ? "Administrator" : "Member"}</small></div><button title="Sign out" aria-label="Sign out" onClick={async () => { const res = await fetch("/api/auth/logout", { method: "POST" }); if (res.ok) location.assign("/login"); }}>↪</button></div>
       </div>
-      {/* Mobile sidebar overlay */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/20 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {/* Sidebar - Desktop */}
-      <div className="hidden lg:flex">
-        <Sidebar />
-      </div>
-
-      {/* Sidebar - Mobile */}
-      <div
-        className={`fixed inset-y-0 left-0 z-50 transform lg:hidden transition-transform duration-300 ease-in-out ${
-          sidebarOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
-      >
-        <Sidebar onClose={() => setSidebarOpen(false)} />
-      </div>
-
-      {/* Main content */}
-      <main className="flex flex-col flex-1 h-full min-w-0 relative transition-colors duration-300 isolate">
-        {/* Faint grid background */}
-        <div className="landing-grid absolute inset-0 pointer-events-none -z-10" aria-hidden="true" />
-        <Header key={pathname} onMenuClick={() => setSidebarOpen(true)} />
-        <div className={`flex-1 overflow-y-auto custom-scrollbar ${pathname === "/dashboard/basic-chat" ? "" : "p-6 lg:p-10"} ${pathname === "/dashboard/basic-chat" ? "flex flex-col overflow-hidden" : ""}`}>
-          <div className={`${pathname === "/dashboard/basic-chat" ? "flex-1 w-full h-full flex flex-col" : "max-w-7xl mx-auto"}`}>{children}</div>
-        </div>
-      </main>
+    </aside>
+    <div className="yard-main-column">
+      <header className="yard-topbar"><button className="yard-mobile-menu" aria-label="Toggle navigation" aria-expanded={open} onClick={() => setOpen(v => !v)}><YardIcon name="menu"/></button><div className="yard-breadcrumb">Workspace <span>/</span><strong>{current}</strong></div><div className="yard-topbar-actions"><span className="yard-alpha">ALPHA 0.1</span><ThemeToggle/></div></header>
+      <main id="yard-main" className="yard-main" tabIndex={-1}>{children}</main>
     </div>
-  );
+    <div className="yard-toasts" aria-live="polite">{notifications.map(n => <div key={n.id} className="yard-notice"><div>{n.title && <strong>{n.title}</strong>}<p>{n.message}</p></div><button aria-label="Dismiss notification" onClick={() => remove(n.id)}>×</button></div>)}</div>
+  </div>;
 }

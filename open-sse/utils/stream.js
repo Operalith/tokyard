@@ -57,12 +57,24 @@ export function createSSEStream(options = {}) {
     connectionId = null,
     body = null,
     onStreamComplete = null,
+    onUsage = null,
     apiKey = null,
     credentials = null
   } = options;
 
   let buffer = "";
   let usage = null;
+  let providerUsage = null;
+  let providerFinished = false;
+  // Keep billing observations separate from client-facing estimates and buffers.
+  const observeUsage = parsed => {
+    if (!onUsage || !parsed) return;
+    providerUsage = mergeUsage(providerUsage, extractUsage(parsed));
+    if (parsed.choices?.some(c => c.finish_reason) || parsed.delta?.stop_reason ||
+        parsed.done || parsed.candidates?.some(c => c.finishReason) || parsed.response?.candidates?.some(c => c.finishReason) ||
+        (parsed.response?.usage && isOpenAIResponsesTerminalEvent(null, parsed))) providerFinished = true;
+  };
+
 
   // Tool-call ids already sent to the client, keyed by the tool-call index.
   // A late fragment that opens a NEW index without an id must not reach the
@@ -111,6 +123,7 @@ export function createSSEStream(options = {}) {
     if (completionFlushTimer) { clearTimeout(completionFlushTimer); completionFlushTimer = null; }
     if (finalized) return;
     finalized = true;
+    if (providerFinished && providerUsage) onUsage?.(providerUsage);
 
     const isPassthrough = mode === STREAM_MODE.PASSTHROUGH;
     let finalUsage = isPassthrough ? usage : state?.usage;
@@ -185,6 +198,7 @@ export function createSSEStream(options = {}) {
           if (trimmed.startsWith("data:") && trimmed.slice(5).trim() !== "[DONE]") {
             try {
               let parsed = JSON.parse(trimmed.slice(5).trim());
+              observeUsage(parsed);
 
               const idFixed = fixInvalidId(parsed);
 
@@ -322,6 +336,7 @@ export function createSSEStream(options = {}) {
 
         const parsed = parseSSELine(trimmed, targetFormat);
         if (!parsed) continue;
+        observeUsage(parsed);
 
         // Responses API same-format passthrough: preserve event framing + track terminal state
         const isOpenAIResponsesStream = targetFormat === FORMATS.OPENAI_RESPONSES;
@@ -519,6 +534,7 @@ export function createSSEStream(options = {}) {
           // which must not be translated. An Ollama chunk also carries done:true,
           // but it is the real final chunk — it holds finish_reason and the token
           // counts — so it has to go through.
+          observeUsage(parsed);
           const isDoneSentinel = parsed?.done && targetFormat !== FORMATS.OLLAMA;
           if (parsed && !isDoneSentinel) {
             // Same accumulation the transform loop does, so finalizeStream() can
@@ -590,7 +606,7 @@ export function createSSEStream(options = {}) {
   });
 }
 
-export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null, credentials = null) {
+export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, provider = null, reqLogger = null, toolNameMap = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, customToolNames = null, credentials = null, onUsage = null) {
   return createSSEStream({
     mode: STREAM_MODE.TRANSLATE,
     targetFormat,
@@ -603,12 +619,13 @@ export function createSSETransformStreamWithLogger(targetFormat, sourceFormat, p
     connectionId,
     body,
     onStreamComplete,
+    onUsage,
     apiKey,
     credentials
   });
 }
 
-export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, toolNameMap = null) {
+export function createPassthroughStreamWithLogger(provider = null, reqLogger = null, model = null, connectionId = null, body = null, onStreamComplete = null, apiKey = null, toolNameMap = null, onUsage = null) {
   return createSSEStream({
     mode: STREAM_MODE.PASSTHROUGH,
     provider,
@@ -618,6 +635,7 @@ export function createPassthroughStreamWithLogger(provider = null, reqLogger = n
     connectionId,
     body,
     onStreamComplete,
+    onUsage,
     apiKey
   });
 }

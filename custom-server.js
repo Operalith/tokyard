@@ -126,6 +126,7 @@ http.createServer = (...args) => {
 };
 
 if (require.main === module) {
+  process.env.PORT ||= "20120";
   const standalone = path.join(__dirname, "server.js");
   if (fs.existsSync(standalone)) {
     require(standalone);
