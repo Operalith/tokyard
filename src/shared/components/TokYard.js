@@ -12,6 +12,8 @@ export function YardIcon({ name, size = 18 }) {
     chevron: <path d="m9 5 7 7-7 7"/>,
     support: <path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/>,
     settings: <><circle cx="12" cy="12" r="3"/><path d="m9 3-1 3-3 1-2 5 2 5 3 1 1 3h6l1-3 3-1 2-5-2-5-3-1-1-3Z"/></>,
+    savings: <><path d="M13 3 5 14h6l-1 7 9-12h-7l1-6Z"/></>,
+    tools: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
     menu: <path d="M4 6h16M4 12h16M4 18h16"/>,
     arrow: <path d="M5 12h14m-6-6 6 6-6 6"/>,
     refresh: <><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 6a8 8 0 0 1 14 6M4 12a8 8 0 0 0 14 6"/></>,

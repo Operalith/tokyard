@@ -3,6 +3,8 @@ import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import bcrypt from "bcryptjs";
+import path from "node:path";
+import { DATA_FILE } from "@/lib/db/paths";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -25,6 +27,7 @@ export async function GET() {
     
     return NextResponse.json({ 
       ...safeSettings, 
+      databasePath: path.resolve(DATA_FILE),
       enableRequestLogs,
       enableTranslator,
       hasPassword: !!password

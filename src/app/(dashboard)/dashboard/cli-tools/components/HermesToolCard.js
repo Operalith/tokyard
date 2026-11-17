@@ -44,7 +44,7 @@ export default function HermesToolCard({
   const [activeProfile, setActiveProfile] = useState("default");
   const [applyingAll, setApplyingAll] = useState(false);
   const [copiedCommand, setCopiedCommand] = useState("");
-  // Audio transcription via 9router: stt.provider "openai" + base_url override points
+  // Audio transcription via TokYard: stt.provider "openai" + base_url override points
   // Hermes' speech-to-text at /v1/audio/transcriptions (per-profile, saved with Apply).
   const [audioEnabled, setAudioEnabled] = useState(false);
   const [sttModel, setSttModel] = useState("");
@@ -238,7 +238,7 @@ export default function HermesToolCard({
   };
 
   // Endpoint + API key across every profile. Each profile keeps its own model — only
-  // profiles already routed through 9router are refreshed, the rest are reported.
+  // profiles already routed through TokYard are refreshed, the rest are reported.
   // The endpoint field mirrors whatever the active profile currently points at, so it can
   // hold a foreign provider URL (openrouter, ...) — propagating that to every profile would
   // be a mistake, hence the known-endpoint guard.
@@ -513,9 +513,9 @@ export default function HermesToolCard({
                 <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-[8rem_auto_1fr_auto] sm:items-center sm:gap-2">
                   <span className="text-xs font-semibold text-text-main sm:text-right sm:text-sm">Audio STT</span>
                   <span className="material-symbols-outlined hidden text-text-muted text-[14px] sm:inline">arrow_forward</span>
-                  <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer" title="Route Hermes voice & audio transcription through 9router's /v1/audio/transcriptions — usage is tracked on this instance">
+                  <label className="flex items-center gap-2 text-xs text-text-muted cursor-pointer" title="Route Hermes voice & audio transcription through TokYard's /v1/audio/transcriptions — usage is tracked on this instance">
                     <input type="checkbox" checked={audioEnabled} onChange={(e) => setAudioEnabled(e.target.checked)} className="w-3.5 h-3.5 accent-primary cursor-pointer shrink-0" />
-                    <span>Transcribe voice &amp; audio via 9router (per-profile)</span>
+                    <span>Transcribe voice &amp; audio via TokYard (per-profile)</span>
                   </label>
                   <span />
                 </div>
@@ -591,7 +591,7 @@ export default function HermesToolCard({
                     size="sm"
                     onClick={handleApplyAll}
                     loading={applyingAll}
-                    title="Set the endpoint and API key on every profile that routes through 9router. Each profile keeps its own model."
+                    title="Set the endpoint and API key on every profile that routes through TokYard. Each profile keeps its own model."
                     className="w-full sm:w-auto"
                   >
                     <span className="material-symbols-outlined text-[14px] mr-1">groups</span>Apply to All Profiles
@@ -618,7 +618,7 @@ export default function HermesToolCard({
           activeProviders={activeProviders}
           modelAliases={modelAliases}
           kindFilter={modalTarget === "stt" ? "stt" : undefined}
-          title={modalTarget === "stt" ? "Select STT Model — audio transcription via 9router" : `Select Model for Hermes Agent${modalTarget !== "default" ? ` — ${HERMES_ROLES.find((r) => r.id === modalTarget)?.label || modalTarget}` : ""}`}
+          title={modalTarget === "stt" ? "Select STT Model — audio transcription via TokYard" : `Select Model for Hermes Agent${modalTarget !== "default" ? ` — ${HERMES_ROLES.find((r) => r.id === modalTarget)?.label || modalTarget}` : ""}`}
         />
       )}
 
