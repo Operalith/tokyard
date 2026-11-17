@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Fix sidebar Profiles/Activity navigation, active states and browser history.
+- Restore Token Saver access and add an owner tools directory for inherited gateway features.
+- Show the actual database location, refresh visible branding and SAML defaults, and explain the alpha backup limitation.
+- Add browser regression checks for desktop/mobile navigation, Token Saver persistence and member access.
+
 ## 0.1.0-alpha.1
 
 - Establish TokYard as an independent MIT fork of 9router under Operalith.

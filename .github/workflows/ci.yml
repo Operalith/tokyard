@@ -26,7 +26,10 @@ jobs:
       - run: npm test
       - run: npm run test:upstream
       - run: npm run build
+      - run: npx playwright-core install --with-deps chromium
       - run: npm run test:smoke
+        env:
+          TOKYARD_BROWSER_CHECK: '1'
   container:
     runs-on: ubuntu-latest
     timeout-minutes: 20

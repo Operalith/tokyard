@@ -20,6 +20,7 @@ An independent MIT-licensed fork of [9router](https://github.com/decolua/9router
 - Held budgets for interrupted or unverifiable requests, with audited owner reconciliation.
 - Responsive Workspace dashboard, light/dark themes and a personal member view.
 - Inherited provider connections and OpenAI / Anthropic / Responses translation.
+- Owner Token Saver controls (RTK, Headroom and prompt options), plus a Tools directory for advanced gateway pages.
 - An optional external donation page, configured by the instance owner.
 
 ## Installation
@@ -127,6 +128,8 @@ npm run test:smoke
 ```
 
 The focused suite covers quotas, shared keys, UTC rollover, session invalidation, ownership, request cancellation, held reservations and raw streaming usage. Selected upstream checks cover access control, attribution, migrations, cache accounting and stream termination. The smoke check starts an isolated production server and a local mock provider; it makes no paid AI calls.
+
+CI also installs Chromium and runs browser regression checks. Locally, run `npx playwright-core install chromium` and then `TOKYARD_BROWSER_CHECK=1 npm run test:smoke`, or set `TOKYARD_BROWSER_EXECUTABLE` to an existing Chrome/Chromium executable. These checks cover sidebar navigation, history, mobile navigation, the configured database path, Token Saver persistence and member restrictions.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 

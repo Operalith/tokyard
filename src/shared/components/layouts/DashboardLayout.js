@@ -19,7 +19,7 @@ export default function DashboardLayout({ children }) {
     update(); window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
-  useEffect(() => { setOpen(false); }, [pathname]);
+  useEffect(() => { setHash(location.hash); setOpen(false); }, [pathname]);
   useEffect(() => {
     if (!open) return;
     const close = e => { if (e.key === "Escape") setOpen(false); };
@@ -34,19 +34,24 @@ export default function DashboardLayout({ children }) {
       { href: "/dashboard#activity", label: "Activity", icon: "activity" },
       { href: "/dashboard/providers", label: "Connections", icon: "connections" },
       { href: "/dashboard/endpoint", label: "Gateway", icon: "key" },
+      { href: "/dashboard/token-saver", label: "Token Saver", icon: "savings" },
+      { href: "/dashboard/tools", label: "Tools", icon: "tools" },
       { href: "/dashboard/profile", label: "Settings", icon: "settings" },
     ] : []),
   ];
-  const active = href => href.includes("#") ? pathname === "/dashboard" && hash === href.slice(href.indexOf("#")) : pathname === href && (href !== "/dashboard" || !hash);
+  const active = href => href.includes("#") ? pathname === "/dashboard" && hash === href.slice(href.indexOf("#")) : href === "/dashboard" ? pathname === href && !["#profiles", "#activity"].includes(hash) : pathname === href || pathname.startsWith(`${href}/`);
   const current = nav.find(n => active(n.href))?.label || (pathname.includes("support") ? "Support TokYard" : "Gateway workspace");
   return <div className="yard-shell">
-    <a className="yard-skip" href="#yard-main">Skip to content</a>
+    <a className="yard-skip" href="#yard-main" onClick={event => { event.preventDefault(); document.getElementById("yard-main")?.focus(); }}>Skip to content</a>
     {open && <button className="yard-backdrop" aria-label="Close navigation" onClick={() => setOpen(false)}/>}
     <aside className={`yard-sidebar ${open ? "is-open" : ""}`} aria-label="Workspace navigation">
-      <Link href="/dashboard" className="yard-brand"><TokYardMark/><span>TokYard<span className="yard-brand-note">AI access, in balance.</span></span></Link>
+      <a href="/dashboard" className="yard-brand"><TokYardMark/><span>TokYard<span className="yard-brand-note">AI access, in balance.</span></span></a>
       <div className="yard-workspace-tag"><span className="yard-dot"/><span>Personal workspace</span><span className="yard-tag">α</span></div>
       <div className="yard-nav-label">WORKSPACE</div>
-      <nav>{nav.map(item => <Link key={item.href} href={item.href} className={`yard-nav-link ${active(item.href) ? "active" : ""}`} onClick={() => setOpen(false)} aria-current={active(item.href) ? "page" : undefined}><YardIcon name={item.icon}/>{item.label}</Link>)}</nav>
+      <nav>{nav.map(item => {
+        const NavLink = item.href === "/dashboard" || item.href.includes("#") ? "a" : Link;
+        return <NavLink key={item.href} href={item.href} className={`yard-nav-link ${active(item.href) ? "active" : ""}`} onClick={() => setOpen(false)} aria-current={active(item.href) ? "page" : undefined}><YardIcon name={item.icon}/>{item.label}</NavLink>;
+      })}</nav>
       <div className="yard-sidebar-bottom">
         <div className="yard-open-source"><span className="yard-dot"/>Open source. Shared possibility.</div>
         <Link href="/dashboard/support" className={`yard-nav-link ${pathname.includes("support") ? "active" : ""}`}><YardIcon name="support"/>Support TokYard</Link>
