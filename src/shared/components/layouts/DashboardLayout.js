@@ -42,7 +42,7 @@ export default function DashboardLayout({ children }) {
   const active = href => href.includes("#") ? pathname === "/dashboard" && hash === href.slice(href.indexOf("#")) : href === "/dashboard" ? pathname === href && !["#profiles", "#activity"].includes(hash) : pathname === href || pathname.startsWith(`${href}/`);
   const current = nav.find(n => active(n.href))?.label || (pathname.includes("support") ? "Support TokYard" : "Gateway workspace");
   return <div className="yard-shell">
-    <a className="yard-skip" href="#yard-main">Skip to content</a>
+    <a className="yard-skip" href="#yard-main" onClick={event => { event.preventDefault(); document.getElementById("yard-main")?.focus(); }}>Skip to content</a>
     {open && <button className="yard-backdrop" aria-label="Close navigation" onClick={() => setOpen(false)}/>}
     <aside className={`yard-sidebar ${open ? "is-open" : ""}`} aria-label="Workspace navigation">
       <a href="/dashboard" className="yard-brand"><TokYardMark/><span>TokYard<span className="yard-brand-note">AI access, in balance.</span></span></a>

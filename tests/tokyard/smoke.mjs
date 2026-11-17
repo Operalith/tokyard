@@ -109,6 +109,10 @@ try {
       await page.goto(`${base}/dashboard`);
       await heading("Shared access. Clear limits.");
       await visit("Profiles", "A policy for every team.");
+      await page.getByRole("link", { name: "Skip to content", exact: true }).focus();
+      await page.keyboard.press("Enter");
+      assert.equal(await page.evaluate(() => document.activeElement.id), "yard-main");
+      await heading("A policy for every team.");
       await visit("Activity", "Every token, accounted for.");
       await page.goBack(); await heading("A policy for every team.");
       await page.goForward(); await heading("Every token, accounted for.");
