@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getAdapter } from "../driver.js";
 import { keyAccessFromColumns, keyAccessToColumns } from "@/shared/utils/keyAccess.js";
 import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
+import { hashWorkspaceKey, getWorkspaceUser } from "@/lib/workspace.js";
 
 function rowToKey(row) {
   if (!row) return null;
@@ -13,12 +14,14 @@ function rowToKey(row) {
     isActive: row.isActive === 1 || row.isActive === true,
     createdAt: row.createdAt,
     access: keyAccessFromColumns(row.accessRestricted, row.accessAllow),
+    userId: row.userId || null,
+    prefix: row.prefix || null,
   };
 }
 
 export async function getApiKeys() {
   const db = await getAdapter();
-  const rows = db.all(`SELECT * FROM apiKeys ORDER BY createdAt ASC`);
+  const rows = db.all(`SELECT * FROM apiKeys WHERE userId IS NULL ORDER BY createdAt ASC`);
   return rows.map(rowToKey);
 }
 
@@ -32,8 +35,15 @@ export async function getApiKeyById(id) {
 export async function getApiKeyByKey(key) {
   if (!key) return null;
   const db = await getAdapter();
-  const row = db.get(`SELECT * FROM apiKeys WHERE key = ?`, [key]);
-  return rowToKey(row);
+  const row = db.get(`SELECT * FROM apiKeys WHERE key = ?`, [key.startsWith("ty_") ? hashWorkspaceKey(key) : key]);
+  const record = rowToKey(row);
+  if (record?.userId) {
+    if (!key.startsWith("ty_")) return null;
+    const user = await getWorkspaceUser(record.userId);
+    record.isActive = record.isActive && !!user?.isActive;
+    record.access = { restricted: !!user?.allowedModels.length, allow: user?.allowedModels || [] };
+  }
+  return record;
 }
 
 export async function createApiKey(name, machineId) {
@@ -64,6 +74,7 @@ export async function updateApiKey(id, data) {
   db.transaction(() => {
     const row = db.get(`SELECT * FROM apiKeys WHERE id = ?`, [id]);
     if (!row) return;
+    if (row.userId) throw new Error("Manage member keys in Workspace");
     const merged = { ...rowToKey(row), ...data };
     const cols = keyAccessToColumns(merged.access);
     db.run(
@@ -77,13 +88,13 @@ export async function updateApiKey(id, data) {
 
 export async function deleteApiKey(id) {
   const db = await getAdapter();
+  if (db.get("SELECT userId FROM apiKeys WHERE id = ?", [id])?.userId) {
+    return db.run("UPDATE apiKeys SET isActive = 0 WHERE id = ?", [id]).changes > 0;
+  }
   const res = db.run(`DELETE FROM apiKeys WHERE id = ?`, [id]);
   return (res?.changes ?? 0) > 0;
 }
 
 export async function validateApiKey(key) {
-  const db = await getAdapter();
-  const row = db.get(`SELECT isActive FROM apiKeys WHERE key = ?`, [key]);
-  if (!row) return false;
-  return row.isActive === 1 || row.isActive === true;
+  return !!(await getApiKeyByKey(key))?.isActive;
 }

@@ -19,6 +19,7 @@ export async function GET() {
     const samlEmail = String(session?.samlEmail || "").trim();
 
     const displayName =
+      session?.name ||
       samlName ||
       samlEmail ||
       oidcName ||
@@ -39,6 +40,8 @@ export async function GET() {
       displayName,
       loginMethod,
       authenticated: !!session,
+      role: session?.role || null,
+      userId: session?.userId || null,
       oidcName: oidcName || null,
       oidcEmail: oidcEmail || null,
       oidcLogin: !!session?.oidc,

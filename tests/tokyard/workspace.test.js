@@ -1,0 +1,134 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { beforeEach, afterEach, test, expect, vi } from "vitest";
+
+let dir, w, db, user, key;
+beforeEach(async () => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), "tokyard-test-"));
+  process.env.DATA_DIR = dir;
+  delete global._dbAdapter;
+  vi.resetModules();
+  w = await import("@/lib/workspace.js");
+  db = await w.ensureWorkspace();
+  user = await w.createWorkspaceUser({ name: "Member", email: "member@example.com", password: "test-password-123" });
+  key = await w.createWorkspaceKey(user.id, "Laptop");
+});
+afterEach(() => {
+  vi.useRealTimers();
+  db?.close();
+  delete global._dbAdapter;
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("secrets stay hashed; a stored hash cannot authenticate as a bearer key", async () => {
+  const { getApiKeyByKey, validateApiKey, getApiKeys } = await import("@/lib/db/repos/apiKeysRepo.js");
+  const stored = db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key;
+  expect(stored).toBe(w.hashWorkspaceKey(key.key));
+  expect(await validateApiKey(stored)).toBe(false);
+  expect((await getApiKeyByKey(key.key)).userId).toBe(user.id);
+  expect(await getApiKeys()).toEqual([]);
+  expect(JSON.stringify(await w.listWorkspaceKeys(user.id))).not.toContain(stored);
+  expect(user.passwordHash).toBeUndefined();
+  expect(await w.authenticateWorkspaceUser("MEMBER@example.com", "wrong-password")).toBeNull();
+  expect((await w.authenticateWorkspaceUser("MEMBER@example.com", "test-password-123")).id).toBe(user.id);
+});
+
+test("validation rejects weak passwords, invalid budgets and duplicate emails", async () => {
+  await expect(w.createWorkspaceUser({ name: "X", email: "x@example.com", password: "123" })).rejects.toThrow("Password");
+  await expect(w.createWorkspaceUser({ name: "X", email: user.email.toUpperCase(), password: "test-password-123" })).rejects.toThrow("Email already exists");
+  await expect(w.saveProfile({ name: "Invalid", tokenLimit: -1 })).rejects.toThrow("Token allowance");
+  await expect(w.updateWorkspaceUser(user.id, { isActive: "false" })).rejects.toThrow("boolean");
+  await expect(w.updateWorkspaceUser(user.id, { tokenLimit: 1.5 })).rejects.toThrow("integer");
+});
+
+test("parallel reservations and rotated keys share a single atomic allowance", async () => {
+  await w.updateWorkspaceUser(user.id, { tokenLimit: 100 });
+  const second = await w.createWorkspaceKey(user.id, "Desktop");
+  const results = await Promise.allSettled([w.reserveWorkspaceTokens(key.id, 60, "openai/test"), w.reserveWorkspaceTokens(second.id, 60, "openai/test")]);
+  expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ reserved: 60, remaining: 40 });
+  const reservation = results.find(r => r.status === "fulfilled").value;
+  await w.settleWorkspaceTokens(reservation.id, 45);
+  await w.settleWorkspaceTokens(reservation.id, 45);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 45, reserved: 0, remaining: 55 });
+  await expect(w.reserveWorkspaceTokens(second.id, 56, "openai/test")).rejects.toThrow("allowance");
+});
+
+test("concurrency cap rolls back without leaking reserved tokens", async () => {
+  await w.saveProfile({ maxConcurrent: 1 }, "standard");
+  await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await expect(w.reserveWorkspaceTokens(key.id, 200, "openai/test")).rejects.toThrow("Concurrent");
+  expect((await w.getUserBudget(user.id)).reserved).toBe(100);
+});
+
+test("pause and revoke immediately reject inference and invalidate sessions", async () => {
+  const { getDashboardAuthSession, createDashboardAuthToken } = await import("@/lib/auth/dashboardSession.js");
+  const token = await createDashboardAuthToken({ role: "member", userId: user.id, authVersion: user.authVersion });
+  expect((await getDashboardAuthSession(token)).role).toBe("member");
+  await w.updateWorkspaceUser(user.id, { isActive: false });
+  expect(await getDashboardAuthSession(token)).toBeNull();
+  await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("disabled");
+  await w.updateWorkspaceUser(user.id, { isActive: true });
+  await w.revokeWorkspaceKey(user.id, key.id);
+  await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Invalid API key");
+});
+
+test("profile edits apply to existing keys and individual overrides remain explicit", async () => {
+  const { getApiKeyByKey } = await import("@/lib/db/repos/apiKeysRepo.js");
+  await w.saveProfile({ tokenLimit: 500, allowedModels: ["openai/test"] }, "standard");
+  expect((await getApiKeyByKey(key.key)).access).toEqual({ restricted: true, allow: ["openai/test"] });
+  expect((await w.getUserBudget(user.id)).limit).toBe(500);
+  await w.updateWorkspaceUser(user.id, { tokenLimit: 20 });
+  expect((await w.getUserBudget(user.id)).limit).toBe(20);
+  await w.updateWorkspaceUser(user.id, { tokenLimit: null });
+  expect((await w.getUserBudget(user.id)).limit).toBe(500);
+});
+
+test("unknown and restarted requests keep their hold until audited reconciliation", async () => {
+  const first = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await expect(w.settleWorkspaceTokens(first.id, 0, "manual", "review", "owner")).rejects.toThrow("Only held");
+  await w.recoverWorkspaceReservations();
+  expect((await w.listWorkspaceRequests(user.id))[0].status).toBe("uncertain");
+  expect((await w.getUserBudget(user.id)).reserved).toBe(100);
+  await w.settleWorkspaceTokens(first.id, 30, "manual", "Checked provider logs", "owner");
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 30, reserved: 0 });
+  expect(db.get("SELECT COUNT(*) AS n FROM workspaceAudit WHERE action = 'request.reconciled'").n).toBe(1);
+});
+
+test("UTC month reset keeps late settlement in its original period", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-30T23:59:59Z"));
+  const reservation = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  vi.setSystemTime(new Date("2026-12-01T00:00:01Z"));
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 0, reserved: 0, period: "2026-12" });
+  await w.settleWorkspaceTokens(reservation.id, 90);
+  expect(await w.getUserBudget(user.id, "2026-11")).toMatchObject({ consumed: 90, reserved: 0 });
+});
+
+test("HTTP boundary enforces ownership, role and same-origin mutations", async () => {
+  const { createDashboardAuthToken } = await import("@/lib/auth/dashboardSession.js");
+  const { requireWorkspaceSession } = await import("@/lib/workspaceHttp.js");
+  const token = await createDashboardAuthToken({ role: "member", userId: user.id, authVersion: user.authVersion });
+  const request = (route, options = {}) => new Request(`http://localhost${route}`, { ...options, headers: { cookie: `auth_token=${token}`, ...options.headers } });
+  await expect(requireWorkspaceSession(request("/api/workspace"), true)).rejects.toMatchObject({ status: 403 });
+  await expect(requireWorkspaceSession(request("/api/workspace/keys", { method: "POST", headers: { origin: "https://evil.example" } }))).rejects.toMatchObject({ status: 403 });
+  const rewritten = new Request("http://localhost:20120/api/workspace/keys", { method: "POST", headers: { cookie: `auth_token=${token}`, host: "127.0.0.1:20120", origin: "http://127.0.0.1:20120" } });
+  expect((await requireWorkspaceSession(rewritten)).userId).toBe(user.id);
+  const keysApi = await import("@/app/api/workspace/keys/route.js");
+  expect((await keysApi.GET(request("/api/workspace/keys?userId=someone-else"))).status).toBe(403);
+  expect((await keysApi.POST(request("/api/workspace/keys", { method: "POST", body: JSON.stringify({ userId: "someone-else", name: "stolen" }) }))).status).toBe(403);
+});
+
+test("member keys cannot use native, media or system routing aliases, even locally", async () => {
+  const { __test__, proxy } = await import("@/dashboardGuard.js");
+  const request = (url, method = "POST", withKey = true) => ({ url: `http://localhost${url}`, nextUrl: new URL(`http://localhost${url}`), method, headers: new Headers(withKey ? { Authorization: `Bearer ${key.key}`, host: "localhost" } : { host: "localhost" }), cookies: { get: () => null } });
+  for (const url of ["/v1/images/generations", "/v1/embeddings", "/v1beta/models/test:generateContent", "/systemone", "/api/v1/audio/speech"]) expect(await __test__.canAccessPublicLlmApi(request(url))).toBe(false);
+  for (const url of ["/v1/chat/completions", "/api/v1/messages", "/v1/v1/responses", "/responses", "/codex/responses"]) expect(await __test__.canAccessPublicLlmApi(request(url))).toBe(true);
+  expect(await __test__.canAccessPublicLlmApi(request("/v1/chat/completions", "POST", false))).toBe(false);
+  const { createDashboardAuthToken } = await import("@/lib/auth/dashboardSession.js");
+  const token = await createDashboardAuthToken({ role: "member", userId: user.id, authVersion: user.authVersion });
+  const memberRequest = request("/api/providers");
+  memberRequest.cookies.get = () => ({ value: token });
+  expect((await proxy(memberRequest)).status).toBe(403);
+});

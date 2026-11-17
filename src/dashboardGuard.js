@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getSettings, validateApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { verifyDashboardAuthToken } from "@/lib/auth/dashboardSession";
+import { verifyDashboardAuthToken, getDashboardAuthSession } from "@/lib/auth/dashboardSession";
 import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
+import { getApiKeyByKey } from "@/lib/db/repos/apiKeysRepo.js";
 
 const CLI_TOKEN_HEADER = "x-9r-cli-token";
 const CLI_TOKEN_SALT = "9r-cli-auth";
@@ -35,7 +36,7 @@ const PUBLIC_API_PATHS = [
 
 // Public top-level prefixes (LLM API endpoints with their own API key auth).
 // Keep root-level rewrites here too: middleware runs before Next.js rewrites.
-const PUBLIC_PREFIXES = ["/v1", "/v1beta", "/api/v1", "/api/v1beta", "/codex", "/responses"];
+const PUBLIC_PREFIXES = ["/v1", "/v1beta", "/api/v1", "/api/v1beta", "/codex", "/responses", "/systemone"];
 
 // Always require JWT token regardless of requireLogin setting
 const ALWAYS_PROTECTED = [
@@ -159,8 +160,15 @@ async function hasValidApiKey(request) {
 }
 
 async function canAccessPublicLlmApi(request) {
-  if (isLocalRequest(request)) return true;
-  if (await hasValidCliToken(request)) return true;
+  if (request.method === "OPTIONS") return true;
+  const presentedKey = extractApiKey(request);
+  if (presentedKey?.startsWith("ty_")) {
+    const record = await getApiKeyByKey(presentedKey);
+    if (!record?.isActive || !record.userId) return false;
+    const path = request.nextUrl.pathname.replace(/^\/api/, "").replace(/^\/v1\/v1(?=\/|$)/, "/v1");
+    const metered = ["/v1/chat/completions", "/v1/messages", "/v1/responses", "/responses"];
+    return (request.method === "GET" && path === "/v1/models") || (request.method === "POST" && (metered.includes(path) || path.startsWith("/codex/")));
+  }
   return await hasValidApiKey(request);
 }
 
@@ -186,10 +194,8 @@ async function loadSettings() {
 }
 
 async function isAuthenticated(request) {
-  if (await hasValidToken(request)) return true;
-  const settings = await loadSettings();
-  if (settings && settings.requireLogin === false) return true;
-  return false;
+  const session = await getDashboardAuthSession(request.cookies.get("auth_token")?.value);
+  return session?.role === "admin";
 }
 
 function isPublicApi(pathname) {
@@ -210,6 +216,16 @@ export const __test__ = {
 
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
+  const session = await getDashboardAuthSession(request.cookies.get("auth_token")?.value);
+  if (session?.role === "member" && !isPublicLlmApi(pathname)) {
+    if (pathname.startsWith("/api/")) {
+      const allowed = pathname === "/api/auth/status" || pathname === "/api/auth/logout" || pathname === "/api/workspace" || pathname === "/api/workspace/keys" || pathname.startsWith("/api/workspace/keys/");
+      if (!allowed) return NextResponse.json({ error: "Administrator access required" }, { status: 403 });
+      return NextResponse.next();
+    } else if (pathname.startsWith("/dashboard") && !["/dashboard", "/dashboard/support"].includes(pathname)) {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
+  }
 
   // Local-only gate for spawn-capable / host-secret routes.
   if (LOCAL_ONLY_PATHS.some((p) => pathname.startsWith(p))) {
@@ -264,7 +280,7 @@ export async function proxy(request) {
     }
 
     // If login not required, allow through
-    if (!requireLogin) return NextResponse.next();
+    // TokYard always authenticates workspace pages, including legacy installations.
 
     // Verify JWT token
     const token = request.cookies.get("auth_token")?.value;

@@ -2,22 +2,23 @@ import pkg from "../../../package.json" with { type: "json" };
 
 // App configuration
 export const APP_CONFIG = {
-  name: "9Router Proxy",
-  description: "AI Infrastructure Management",
+  name: "TokYard",
+  description: "Shared AI access, individual limits",
   version: pkg.version,
 };
 
 // GitHub configuration
 export const GITHUB_CONFIG = {
-  changelogUrl: "https://raw.githubusercontent.com/decolua/9router/refs/heads/master/CHANGELOG.md",
-  donateUrl: "https://9router.com/api/donate",
+  changelogUrl: "https://raw.githubusercontent.com/Operalith/tokyard/refs/heads/master/CHANGELOG.md",
+  donateUrl: "/dashboard/support",
 };
 
 // Updater configuration
 export const UPDATER_CONFIG = {
-  npmPackageName: "9router",
-  installCmd: "npm i -g 9router",
-  installCmdLatest: "npm i -g 9router@latest --prefer-online",
+  enabled: false,
+  npmPackageName: "tokyard",
+  installCmd: "See https://github.com/Operalith/tokyard#installation",
+  installCmdLatest: "See https://github.com/Operalith/tokyard#installation",
   shutdownCountdownSec: 3,
   exitDelayMs: 500,
   statusPort: 20129,
@@ -29,7 +30,7 @@ export const UPDATER_CONFIG = {
   waitForExitMinMs: 5000,
   waitForExitMaxMs: 20000,
   waitForExitCheckMs: 500,
-  appPort: 20128,
+  appPort: 20120,
 };
 
 // Theme configuration

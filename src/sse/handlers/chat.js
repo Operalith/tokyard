@@ -28,6 +28,7 @@ import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { resolveSmartChoice } from "../services/systemoneRouter.js";
+import { meterWorkspaceChat } from "@/lib/workspaceMetering.js";
 
 /**
  * Handle chat completion request
@@ -35,6 +36,10 @@ import { resolveSmartChoice } from "../services/systemoneRouter.js";
  * Format detection and translation handled by translator
  */
 export async function handleChat(request, clientRawRequest = null) {
+  return meterWorkspaceChat(request, (metered) => handleChatRequest(metered, clientRawRequest));
+}
+
+async function handleChatRequest(request, clientRawRequest = null) {
   let body;
   try {
     body = await request.json();
@@ -51,6 +56,13 @@ export async function handleChat(request, clientRawRequest = null) {
       body,
       headers: Object.fromEntries(request.headers.entries())
     };
+  }
+  if (request.tokyardMeter) {
+    const headers = { ...clientRawRequest.headers };
+    for (const name of Object.keys(headers)) {
+      if (["authorization", "x-api-key", "x-goog-api-key", "cookie"].includes(name.toLowerCase())) delete headers[name];
+    }
+    clientRawRequest = { ...clientRawRequest, headers };
   }
   // Claude Code marks a 1M-context request as `<model>[1m]`; the marker matches
   // no combo, alias or provider/model pair, so it must not reach resolution.
@@ -319,7 +331,9 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       clientRawRequest,
       connectionId: credentials.connectionId,
       userAgent,
-      apiKey,
+      apiKey: request?.tokyardMeter?.keyId || apiKey,
+      onUsage: request?.tokyardMeter ? (usage) => request.tokyardMeter.onUsage(usage) : undefined,
+      onDispatch: request?.tokyardMeter ? () => request.tokyardMeter.onDispatch() : undefined,
       ccFilterNaming: !!chatSettings.ccFilterNaming,
       rtkEnabled: !!chatSettings.rtkEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,
@@ -358,6 +372,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
     });
 
     if (result.success) return result.response;
+    // A second upstream attempt cannot be billed reliably without per-attempt accounting.
+    if (request?.tokyardMeter) return result.response;
 
     // Antigravity 409/429: refresh live quota to get exact resetAt before locking
     let quotaResetMs = null;

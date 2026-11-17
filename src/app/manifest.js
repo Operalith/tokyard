@@ -1,26 +1,26 @@
 export default function manifest() {
   return {
-    name: '9Router - AI Infrastructure Management',
-    short_name: '9Router',
-    description: 'One endpoint for all your AI providers. Manage keys, monitor usage, and scale effortlessly.',
+    name: 'TokYard — Shared AI access',
+    short_name: 'TokYard',
+    description: 'One workspace for AI accounts, people and token allowances.',
     start_url: '/',
     display: 'standalone',
-    background_color: '#0a0a0a',
-    theme_color: '#0a0a0a',
+    background_color: '#187553',
+    theme_color: '#187553',
     orientation: 'portrait-primary',
     icons: [
       {
-        src: '/icons/icon-192.svg',
+        src: '/favicon.svg',
         sizes: '192x192',
         type: 'image/svg+xml',
       },
       {
-        src: '/icons/icon-512.svg',
+        src: '/favicon.svg',
         sizes: '512x512',
         type: 'image/svg+xml',
       },
       {
-        src: '/icons/icon-512.svg',
+        src: '/favicon.svg',
         sizes: '512x512',
         type: 'image/svg+xml',
         purpose: 'maskable',

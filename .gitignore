@@ -50,6 +50,8 @@ logs/*
 source/*
 .cursor/*
 docs/*
+!docs/tokyard/
+!docs/tokyard/**
 !docs/ARCHITECTURE.md
 test/*
 open-sse/test/*
@@ -60,7 +62,6 @@ PUBLIC.md
 Thanks.md
 PUBLIC.en.md
 PR/*
-package-lock.json
 
 
 #Ignore vscode AI rules
@@ -102,3 +103,7 @@ graphify-out/*
 start-dev-silent.cjs
 debug.log
 .scratch/
+
+# TokYard local runtime and private planning
+.tokyard/
+FEASIBILITY.fa.md

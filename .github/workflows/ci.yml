@@ -1,0 +1,45 @@
+name: TokYard checks
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATA_DIR: /tmp/tokyard-checks
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --no-fund
+      - run: npm test
+      - run: npm run test:upstream
+      - run: npm run build
+      - run: npm run test:smoke
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build --tag tokyard:check .
+      - name: Check container health
+        run: |
+          docker run -d --name tokyard-check -p 127.0.0.1:20120:20120 tokyard:check
+          trap 'docker rm -f tokyard-check' EXIT
+          for attempt in {1..45}; do
+            if curl --fail --silent http://127.0.0.1:20120/api/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs tokyard-check
+          exit 1

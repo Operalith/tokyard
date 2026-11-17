@@ -69,25 +69,19 @@ function writeJsonFile(sessionPath, filename, data) {
   }
 }
 
-// Mask sensitive data in headers (DISABLED - keep full token for testing)
-function maskSensitiveHeaders(headers) {
-  if (!headers) return {};
-  return { ...headers };
-  
-  // Old masking code (disabled):
-  // const masked = { ...headers };
-  // const sensitiveKeys = ["authorization", "x-api-key", "cookie", "token"];
-  // 
-  // for (const key of Object.keys(masked)) {
-  //   const lowerKey = key.toLowerCase();
-  //   if (sensitiveKeys.some(sk => lowerKey.includes(sk))) {
-  //     const value = masked[key];
-  //     if (value && value.length > 20) {
-  //       masked[key] = value.slice(0, 10) + "..." + value.slice(-5);
-  //     }
-  //   }
-  // }
-  // return masked;
+// Credentials never belong in request diagnostics.
+export function maskSensitiveHeaders(headers) {
+  const entries = typeof headers?.entries === "function" ? [...headers.entries()] : Object.entries(headers || {});
+  return Object.fromEntries(entries.map(([key, value]) => [key, /authorization|api[-_]?key|cookie|token|secret/i.test(key) ? "[REDACTED]" : value]));
+}
+
+function safeLogUrl(value) {
+  try {
+    const url = new URL(value);
+    url.username = ""; url.password = "";
+    for (const key of url.searchParams.keys()) if (/key|token|secret/i.test(key)) url.searchParams.set(key, "[REDACTED]");
+    return url.href;
+  } catch { return "[invalid URL]"; }
 }
 
 // No-op logger when logging is disabled
@@ -157,7 +151,7 @@ export async function createRequestLogger(sourceFormat, targetFormat, model) {
     logTargetRequest(url, headers, body) {
       writeJsonFile(sessionPath, "4_req_target.json", {
         timestamp: new Date().toISOString(),
-        url,
+        url: safeLogUrl(url),
         headers: maskSensitiveHeaders(headers),
         body
       });

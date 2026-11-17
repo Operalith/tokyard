@@ -3,11 +3,11 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
-PRAGMA synchronous = NORMAL;
+PRAGMA synchronous = FULL;
 PRAGMA temp_store = MEMORY;
 PRAGMA mmap_size = 30000000;
 PRAGMA cache_size = -64000;
@@ -87,8 +87,13 @@ export const TABLES = {
       // syncSchemaFromTables() on boot; existing rows read as unrestricted (0).
       accessRestricted: "INTEGER DEFAULT 0",
       accessAllow: "TEXT",
+      userId: "TEXT REFERENCES workspaceUsers(id)",
+      prefix: "TEXT",
     },
-    indexes: ["CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)"],
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_ak_key ON apiKeys(key)",
+      "CREATE INDEX IF NOT EXISTS idx_ak_user ON apiKeys(userId)",
+    ],
   },
   combos: {
     columns: {
@@ -155,6 +160,69 @@ export const TABLES = {
       "CREATE INDEX IF NOT EXISTS idx_rd_model ON requestDetails(model)",
       "CREATE INDEX IF NOT EXISTS idx_rd_conn ON requestDetails(connectionId)",
     ],
+  },
+  workspaceProfiles: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      name: "TEXT UNIQUE NOT NULL",
+      tokenLimit: "INTEGER NOT NULL CHECK (tokenLimit >= 0)",
+      maxConcurrent: "INTEGER NOT NULL DEFAULT 2 CHECK (maxConcurrent >= 1)",
+      maxOutputTokens: "INTEGER NOT NULL DEFAULT 4096 CHECK (maxOutputTokens >= 1)",
+      allowedModels: "TEXT NOT NULL DEFAULT '[]'",
+      createdAt: "TEXT NOT NULL",
+    },
+  },
+  workspaceUsers: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      name: "TEXT NOT NULL",
+      email: "TEXT UNIQUE NOT NULL COLLATE NOCASE",
+      passwordHash: "TEXT NOT NULL",
+      profileId: "TEXT NOT NULL REFERENCES workspaceProfiles(id)",
+      tokenLimit: "INTEGER CHECK (tokenLimit >= 0)",
+      isActive: "INTEGER NOT NULL DEFAULT 1",
+      authVersion: "INTEGER NOT NULL DEFAULT 1",
+      createdAt: "TEXT NOT NULL",
+    },
+  },
+  workspacePeriods: {
+    columns: {
+      userId: "TEXT NOT NULL REFERENCES workspaceUsers(id)",
+      period: "TEXT NOT NULL",
+      consumed: "INTEGER NOT NULL DEFAULT 0 CHECK (consumed >= 0)",
+      reserved: "INTEGER NOT NULL DEFAULT 0 CHECK (reserved >= 0)",
+    },
+    primaryKey: "PRIMARY KEY (userId, period)",
+  },
+  workspaceRequests: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      userId: "TEXT NOT NULL REFERENCES workspaceUsers(id)",
+      keyId: "TEXT NOT NULL REFERENCES apiKeys(id)",
+      period: "TEXT NOT NULL",
+      model: "TEXT NOT NULL",
+      reservedTokens: "INTEGER NOT NULL CHECK (reservedTokens > 0)",
+      actualTokens: "INTEGER",
+      status: "TEXT NOT NULL CHECK (status IN ('reserved', 'settled', 'uncertain'))",
+      source: "TEXT",
+      note: "TEXT",
+      createdAt: "TEXT NOT NULL",
+      settledAt: "TEXT",
+    },
+    indexes: [
+      "CREATE INDEX IF NOT EXISTS idx_wr_user_period ON workspaceRequests(userId, period)",
+      "CREATE INDEX IF NOT EXISTS idx_wr_status ON workspaceRequests(status, createdAt)",
+    ],
+  },
+  workspaceAudit: {
+    columns: {
+      id: "TEXT PRIMARY KEY",
+      actor: "TEXT NOT NULL",
+      action: "TEXT NOT NULL",
+      subjectId: "TEXT",
+      details: "TEXT NOT NULL",
+      createdAt: "TEXT NOT NULL",
+    },
   },
 };
 

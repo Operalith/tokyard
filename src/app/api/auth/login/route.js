@@ -7,8 +7,9 @@ import { isOidcConfigured } from "@/lib/auth/oidc";
 import { isSamlConfigured } from "@/lib/auth/saml.js";
 import { checkLock, recordFail, recordSuccess, getClientIp } from "@/lib/auth/loginLimiter";
 import { isLocalRequest } from "@/dashboardGuard";
+import { authenticateWorkspaceUser } from "@/lib/workspace.js";
 
-const RESET_HINT = "Forgot password? Reset to default via 9Router CLI → Settings → Reset Password to Default.";
+const RESET_HINT = "Forgot password? Ask the workspace owner or reset INITIAL_PASSWORD on the server.";
 const NO_STORE_HEADERS = { "Cache-Control": "no-store" };
 
 function isTunnelRequest(request, settings) {
@@ -29,7 +30,20 @@ export async function POST(request) {
       );
     }
 
-    const { password } = await request.json();
+    const { password, email } = await request.json();
+    if (typeof password !== "string" || Buffer.byteLength(password) > 72) {
+      return NextResponse.json({ error: "Invalid credentials" }, { status: 400 });
+    }
+    if (email !== undefined) {
+      const user = await authenticateWorkspaceUser(email, password);
+      if (!user) {
+        recordFail(ip);
+        return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+      }
+      recordSuccess(ip);
+      await setDashboardAuthCookie(await cookies(), request, { role: "member", userId: user.id, authVersion: user.authVersion });
+      return NextResponse.json({ success: true }, { headers: NO_STORE_HEADERS });
+    }
     const settings = await getSettings();
 
     // Block login via tunnel/tailscale if dashboard access is disabled
@@ -55,7 +69,10 @@ export async function POST(request) {
       isValid = await bcrypt.compare(password, storedHash);
     } else {
       // Use env var or default
-      const initialPassword = process.env.INITIAL_PASSWORD || "123456";
+      const initialPassword = process.env.INITIAL_PASSWORD;
+      if (!initialPassword || initialPassword.length < 12 || initialPassword === "change-me") {
+        return NextResponse.json({ error: "Set INITIAL_PASSWORD to a password of at least 12 characters before signing in as owner" }, { status: 503 });
+      }
       isValid = password === initialPassword;
     }
 
