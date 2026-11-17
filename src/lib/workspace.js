@@ -9,7 +9,9 @@ export class WorkspaceError extends Error {
 const fail = (message, status) => { throw new WorkspaceError(message, status); };
 export const hashWorkspaceKey = (key) => `sha256:${createHash("sha256").update(key).digest("hex")}`;
 export const currentPeriod = (date = new Date()) => date.toISOString().slice(0, 7);
-const nextReset = () => new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() + 1, 1)).toISOString();
+export const currentDay = (date = new Date()) => date.toISOString().slice(0, 10);
+const nextReset = (date) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1)).toISOString();
+const nextDailyReset = (date) => new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1)).toISOString();
 
 function text(value, label, max = 120) {
   if (typeof value !== "string" || !value.trim() || value.trim().length > max) fail(`${label} is required (maximum ${max} characters)`);
@@ -52,9 +54,10 @@ export async function saveProfile(input, id = null, actor = "owner") {
   const db = await ensureWorkspace();
   const existing = id ? db.get("SELECT * FROM workspaceProfiles WHERE id = ?", [id]) : null;
   if (id && !existing) fail("Profile not found", 404);
-  const data = { ...(existing ? profile(existing) : { tokenLimit: 1000000, maxConcurrent: 2, maxOutputTokens: 4096, allowedModels: [] }), ...input };
+  const data = { ...(existing ? profile(existing) : { tokenLimit: 1000000, dailyTokenLimit: null, maxConcurrent: 2, maxOutputTokens: 4096, allowedModels: [] }), ...input };
   const name = text(data.name, "Profile name", 60);
   const tokenLimit = integer(data.tokenLimit, "Token allowance", 0, 1_000_000_000_000);
+  const dailyTokenLimit = data.dailyTokenLimit === null ? null : integer(data.dailyTokenLimit, "Daily token allowance", 0, 1_000_000_000_000);
   const maxConcurrent = integer(data.maxConcurrent, "Concurrent requests", 1, 20);
   const maxOutputTokens = integer(data.maxOutputTokens, "Output token limit", 1, 32768);
   if (!Array.isArray(data.allowedModels) || data.allowedModels.length > 200 || data.allowedModels.some(m => typeof m !== "string" || !m.trim() || m.length > 256)) fail("Allowed models must contain at most 200 model identifiers");
@@ -62,21 +65,21 @@ export async function saveProfile(input, id = null, actor = "owner") {
   if (db.get("SELECT id FROM workspaceProfiles WHERE name = ? AND id != ?", [name, id || ""])) fail("Profile name already exists", 409);
   const profileId = id || randomUUID();
   db.transaction(() => {
-    if (id) db.run("UPDATE workspaceProfiles SET name = ?, tokenLimit = ?, maxConcurrent = ?, maxOutputTokens = ?, allowedModels = ? WHERE id = ?", [name, tokenLimit, maxConcurrent, maxOutputTokens, JSON.stringify(allowedModels), id]);
-    else db.run("INSERT INTO workspaceProfiles(id, name, tokenLimit, maxConcurrent, maxOutputTokens, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?)", [profileId, name, tokenLimit, maxConcurrent, maxOutputTokens, JSON.stringify(allowedModels), new Date().toISOString()]);
-    audit(db, actor, id ? "profile.updated" : "profile.created", profileId, { name, tokenLimit, allowedModels });
+    if (id) db.run("UPDATE workspaceProfiles SET name = ?, tokenLimit = ?, dailyTokenLimit = ?, maxConcurrent = ?, maxOutputTokens = ?, allowedModels = ? WHERE id = ?", [name, tokenLimit, dailyTokenLimit, maxConcurrent, maxOutputTokens, JSON.stringify(allowedModels), id]);
+    else db.run("INSERT INTO workspaceProfiles(id, name, tokenLimit, dailyTokenLimit, maxConcurrent, maxOutputTokens, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?)", [profileId, name, tokenLimit, dailyTokenLimit, maxConcurrent, maxOutputTokens, JSON.stringify(allowedModels), new Date().toISOString()]);
+    audit(db, actor, id ? "profile.updated" : "profile.created", profileId, { name, tokenLimit, dailyTokenLimit, allowedModels });
   });
   return profile(db.get("SELECT * FROM workspaceProfiles WHERE id = ?", [profileId]));
 }
 
 export async function getWorkspaceUser(id) {
   const db = await getAdapter();
-  const row = db.get(`SELECT u.*, p.name AS profileName, p.tokenLimit AS profileTokenLimit,
+  const row = db.get(`SELECT u.*, p.name AS profileName, p.tokenLimit AS profileTokenLimit, p.dailyTokenLimit AS profileDailyTokenLimit,
     p.allowedModels, p.maxConcurrent, p.maxOutputTokens FROM workspaceUsers u
     JOIN workspaceProfiles p ON p.id = u.profileId WHERE u.id = ?`, [id]);
   if (!row) return null;
   const { passwordHash, ...user } = row;
-  return { ...user, isActive: !!row.isActive, tokenLimit: row.tokenLimit ?? row.profileTokenLimit, tokenLimitOverride: row.tokenLimit, allowedModels: JSON.parse(row.allowedModels) };
+  return { ...user, isActive: !!row.isActive, tokenLimit: row.tokenLimit ?? row.profileTokenLimit, tokenLimitOverride: row.tokenLimit, dailyTokenLimit: row.dailyTokenLimit ?? row.profileDailyTokenLimit, dailyTokenLimitOverride: row.dailyTokenLimit, allowedModels: JSON.parse(row.allowedModels) };
 }
 
 export async function createWorkspaceUser(input, actor = "owner") {
@@ -106,10 +109,11 @@ export async function updateWorkspaceUser(id, input, actor = "owner") {
   if (input.isActive !== undefined && typeof input.isActive !== "boolean") fail("isActive must be a boolean");
   const active = input.isActive === undefined ? user.isActive : input.isActive;
   const override = input.tokenLimit === undefined ? user.tokenLimitOverride : input.tokenLimit === null ? null : integer(input.tokenLimit, "Token allowance", 0, 1_000_000_000_000);
+  const dailyOverride = input.dailyTokenLimit === undefined ? user.dailyTokenLimitOverride : input.dailyTokenLimit === null ? null : integer(input.dailyTokenLimit, "Daily token allowance", 0, 1_000_000_000_000);
   const hash = input.password === undefined ? null : await bcrypt.hash(password(input.password), 12);
   db.transaction(() => {
-    db.run("UPDATE workspaceUsers SET name = ?, profileId = ?, tokenLimit = ?, isActive = ?, passwordHash = COALESCE(?, passwordHash), authVersion = authVersion + ? WHERE id = ?", [name, profileId, override, active ? 1 : 0, hash, hash || input.isActive !== undefined ? 1 : 0, id]);
-    audit(db, actor, "user.updated", id, { name, profileId, tokenLimit: override, isActive: active, passwordChanged: !!hash });
+    db.run("UPDATE workspaceUsers SET name = ?, profileId = ?, tokenLimit = ?, dailyTokenLimit = ?, isActive = ?, passwordHash = COALESCE(?, passwordHash), authVersion = authVersion + ? WHERE id = ?", [name, profileId, override, dailyOverride, active ? 1 : 0, hash, hash || input.isActive !== undefined ? 1 : 0, id]);
+    audit(db, actor, "user.updated", id, { name, profileId, tokenLimit: override, dailyTokenLimit: dailyOverride, isActive: active, passwordChanged: !!hash });
   });
   return getWorkspaceUser(id);
 }
@@ -123,12 +127,23 @@ export async function authenticateWorkspaceUser(email, secret) {
   return valid && row?.isActive ? getWorkspaceUser(row.id) : null;
 }
 
-export async function getUserBudget(id, period = currentPeriod()) {
+function dailyUsage(db, userId, day) {
+  // ponytail: scan this user's monthly ledger; add daily rollups if request volume makes this expensive.
+  return db.get(`SELECT COALESCE(SUM(CASE WHEN status = 'settled' THEN actualTokens ELSE 0 END), 0) AS consumed,
+    COALESCE(SUM(CASE WHEN status != 'settled' THEN reservedTokens ELSE 0 END), 0) AS reserved
+    FROM workspaceRequests WHERE userId = ? AND period = ? AND substr(createdAt, 1, 10) = ?`, [userId, day.slice(0, 7), day]);
+}
+
+export async function getUserBudget(id, period = null) {
+  const now = new Date();
+  period ??= currentPeriod(now);
   const db = await getAdapter();
   const user = await getWorkspaceUser(id);
   if (!user) fail("User not found", 404);
   const counter = db.get("SELECT consumed, reserved FROM workspacePeriods WHERE userId = ? AND period = ?", [id, period]) || { consumed: 0, reserved: 0 };
-  return { ...counter, limit: user.tokenLimit, remaining: Math.max(0, user.tokenLimit - counter.consumed - counter.reserved), period, resetsAt: nextReset() };
+  const day = currentDay(now), daily = dailyUsage(db, id, day);
+  return { ...counter, limit: user.tokenLimit, remaining: Math.max(0, user.tokenLimit - counter.consumed - counter.reserved), period, resetsAt: nextReset(now),
+    daily: { ...daily, limit: user.dailyTokenLimit, remaining: user.dailyTokenLimit === null ? null : Math.max(0, user.dailyTokenLimit - daily.consumed - daily.reserved), period: day, resetsAt: nextDailyReset(now) } };
 }
 
 export async function listWorkspaceUsers() {
@@ -168,13 +183,17 @@ export async function reserveWorkspaceTokens(keyId, tokens, model) {
   if (db.driver === "sql.js") fail("Token budgets require a persistent SQLite driver", 503);
   const key = db.get("SELECT userId, isActive FROM apiKeys WHERE id = ?", [keyId]);
   if (!key?.isActive || !key.userId) fail("Invalid API key", 401);
-  const id = randomUUID(), period = currentPeriod(), now = new Date().toISOString();
+  const id = randomUUID(), now = new Date().toISOString(), period = now.slice(0, 7);
   db.transaction(() => {
-    const user = db.get("SELECT u.isActive, COALESCE(u.tokenLimit, p.tokenLimit) AS tokenLimit, p.maxConcurrent FROM workspaceUsers u JOIN workspaceProfiles p ON p.id = u.profileId WHERE u.id = ?", [key.userId]);
+    const user = db.get("SELECT u.isActive, COALESCE(u.tokenLimit, p.tokenLimit) AS tokenLimit, COALESCE(u.dailyTokenLimit, p.dailyTokenLimit) AS dailyTokenLimit, p.maxConcurrent FROM workspaceUsers u JOIN workspaceProfiles p ON p.id = u.profileId WHERE u.id = ?", [key.userId]);
     if (!user?.isActive) fail("User access is disabled", 403);
     // ponytail: one server instance; use a shared transactional DB before adding replicas.
     const pending = db.get("SELECT COUNT(*) AS n FROM workspaceRequests WHERE userId = ? AND status = 'reserved'", [key.userId]).n;
     if (pending >= user.maxConcurrent) fail("Concurrent request limit reached", 429);
+    if (user.dailyTokenLimit !== null) {
+      const daily = dailyUsage(db, key.userId, now.slice(0, 10));
+      if (daily.consumed + daily.reserved + tokens > user.dailyTokenLimit) fail("Daily token allowance exhausted or insufficient for this request", 429);
+    }
     db.run("INSERT OR IGNORE INTO workspacePeriods(userId, period) VALUES(?, ?)", [key.userId, period]);
     const result = db.run("UPDATE workspacePeriods SET reserved = reserved + ? WHERE userId = ? AND period = ? AND consumed + reserved + ? <= ?", [tokens, key.userId, period, tokens, user.tokenLimit]);
     if (!result.changes) fail("Monthly token allowance exhausted or insufficient for this request", 429);

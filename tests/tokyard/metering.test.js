@@ -37,6 +37,30 @@ test("JSON response settles raw usage and clamps output before dispatch", async 
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 42, reserved: 0 });
 });
 
+test("output fits the smaller daily/monthly balance and daily exhaustion blocks before dispatch", async () => {
+  await w.saveProfile({ dailyTokenLimit: 3000 }, "standard");
+  for (const monthlyLimit of [1000000, 2500]) {
+    await w.updateWorkspaceUser(user.id, { tokenLimit: monthlyLimit });
+    const before = await w.getUserBudget(user.id);
+    const req = request(key.key, { max_tokens: 99999 });
+    const inputBound = Buffer.byteLength(await req.clone().text()) + 2048;
+    const response = await meter(req, async metered => {
+      expect((await metered.json()).max_tokens).toBe(Math.min(before.remaining, before.daily.remaining) - inputBound);
+      metered.tokyardMeter.onDispatch();
+      metered.tokyardMeter.onUsage({ input_tokens: 30, output_tokens: 7 });
+      return Response.json({});
+    });
+    expect(response.status).toBe(200);
+  }
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 74, reserved: 0, daily: { consumed: 74, reserved: 0 } });
+  await w.updateWorkspaceUser(user.id, { dailyTokenLimit: 0 });
+  const dispatch = vi.fn();
+  const denied = await meter(request(key.key), dispatch);
+  expect(denied.status).toBe(429);
+  expect((await denied.json()).error.message).toContain("daily");
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
 test("stream settles at EOF; estimated or missing usage stays held", async () => {
   const response = await meter(request(key.key, { stream: true }), async req => {
     req.tokyardMeter.onDispatch();

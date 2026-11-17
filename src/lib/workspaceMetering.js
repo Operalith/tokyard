@@ -44,8 +44,9 @@ export async function meterWorkspaceChat(request, dispatch) {
     const inputBound = Buffer.byteLength(raw) + INPUT_OVERHEAD_TOKENS;
     const budget = await getUserBudget(user.id);
     const requestedOutput = body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens ?? user.maxOutputTokens;
-    const output = Math.min(requestedOutput, user.maxOutputTokens, budget.remaining - inputBound);
-    if (output < 1) throw new WorkspaceError("Insufficient token allowance for this request", 429);
+    const remaining = Math.min(budget.remaining, budget.daily.remaining ?? Infinity);
+    const output = Math.min(requestedOutput, user.maxOutputTokens, remaining - inputBound);
+    if (output < 1) throw new WorkspaceError(budget.daily.remaining !== null && budget.daily.remaining <= budget.remaining ? "Insufficient daily token allowance for this request" : "Insufficient monthly token allowance for this request", 429);
     const path = new URL(request.url).pathname;
     const field = path.endsWith("/responses") || path.startsWith("/codex/") ? "max_output_tokens" : body.max_completion_tokens !== undefined ? "max_completion_tokens" : "max_tokens";
     for (const name of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) delete body[name];
