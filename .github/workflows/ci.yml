@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      DATA_DIR: ${{ runner.temp }}/tokyard-checks
+      DATA_DIR: /tmp/tokyard-checks
       NEXT_TELEMETRY_DISABLED: '1'
     steps:
       - uses: actions/checkout@v4
