@@ -21,7 +21,7 @@ An independent MIT-licensed fork of [9router](https://github.com/decolua/9router
 - Responsive Workspace dashboard, light/dark themes and a personal member view.
 - Inherited provider connections and OpenAI / Anthropic / Responses translation.
 - Owner Token Saver controls (RTK, Headroom and prompt options), plus a Tools directory for advanced gateway pages.
-- An optional external donation page, configured by the instance owner.
+- A Bitcoin support page with a receiving address, QR code and wallet link.
 
 ## Installation
 
@@ -104,13 +104,15 @@ This is admission control with conservative reservations, **not an external prov
 
 ## Donations
 
-Set a real HTTPS destination in `.env`:
+Support TokYard development with **BTC on the Bitcoin mainnet**:
 
-```dotenv
-TOKYARD_DONATE_URL=https://your-payment-provider.example/your-page
+```text
+bc1qtx7e0nkcx9y0m4a07u90n06m3fguasaxmmu5kl
 ```
 
-Restart the server. **Support TokYard** shows a donation button only when a valid URL exists. No recipient is preconfigured; links open the configured external service. The operator must choose a payment service they can receive funds through. Add GitHub funding metadata only after establishing an actual funding destination.
+<img src="public/images/donate-bitcoin.png" width="220" alt="TokYard Bitcoin donation QR code" />
+
+**Support TokYard** in the dashboard shows this address, a QR code, a copy button and a `bitcoin:` wallet link. Donations are voluntary and do not buy AI credits. This replaces the external donation URL setting. Fork maintainers changing the recipient must update both the address in the support page and the matching QR image.
 
 ## Backups and upgrades
 

@@ -136,7 +136,21 @@ try {
       await visit("Tools", "More ways to work.");
       assert.ok(await page.getByRole("link", { name: "Open CLI tools", exact: true }).isVisible());
       await page.getByRole("link", { name: "Open Token Saver", exact: true }).click(); await heading("Token Saver");
+      const bitcoinAddress = "bc1qtx7e0nkcx9y0m4a07u90n06m3fguasaxmmu5kl";
+      await page.getByRole("link", { name: "Support TokYard", exact: true }).click();
+      await heading("Support TokYard with Bitcoin");
+      assert.equal(await page.locator(".yard-donation-address").innerText(), bitcoinAddress);
+      assert.equal(await page.getByRole("link", { name: "Open Bitcoin wallet", exact: true }).getAttribute("href"), `bitcoin:${bitcoinAddress}`);
+      await page.waitForFunction(() => document.querySelector(".yard-donation-qr img")?.naturalWidth > 0);
+      await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: base });
+      await page.getByRole("button", { name: "Copy address", exact: true }).click();
+      await page.getByRole("status").filter({ hasText: "Bitcoin address copied." }).waitFor();
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), bitcoinAddress);
+      await page.evaluate(() => Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw new Error("Permission denied"); } } }));
+      await page.getByRole("button", { name: "Copy address", exact: true }).click();
+      await page.getByRole("status").filter({ hasText: "Could not copy." }).waitFor();
       await page.setViewportSize({ width: 390, height: 844 });
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Donation page must fit mobile width");
       await page.getByRole("button", { name: "Toggle navigation", exact: true }).click();
       await visit("Profiles", "A policy for every team.");
       assert.equal(await page.getByRole("button", { name: "Toggle navigation", exact: true }).getAttribute("aria-expanded"), "false");
@@ -145,7 +159,10 @@ try {
       await page.goto(`${base}/dashboard`);
       await heading("Welcome, Smoke.");
       assert.equal(await nav.getByRole("link", { name: "Token Saver", exact: true }).count(), 0);
-      console.log("Browser checks passed: sidebar views, cross-page links, history, reload, database path, Token Saver persistence, tools, mobile and member access.");
+      await page.goto(`${base}/dashboard/support`);
+      await heading("Support TokYard with Bitcoin");
+      assert.equal(await page.locator(".yard-donation-address").innerText(), bitcoinAddress);
+      console.log("Browser checks passed: navigation, Token Saver, tools, Bitcoin recipient/QR/clipboard/wallet link, mobile and member access.");
     } finally { await browser.close(); }
   }
   await call("/api/providers", { headers: { cookie: member } }, 403);

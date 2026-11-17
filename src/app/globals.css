@@ -785,6 +785,16 @@ button:disabled,
 .yard-support h2 { font-size:19px; margin-bottom:14px; font-weight:550; }
 .yard-support p { color:var(--color-text-muted); font-size:13px; line-height:1.9; margin-bottom:22px; }
 .yard-support-links { display:flex; flex-wrap:wrap; gap:12px; }
+.yard-donation-heading { display:flex; align-items:center; gap:14px; margin-bottom:20px; }
+.yard-donation-heading h2 { margin-bottom:8px; }
+.yard-bitcoin-mark { display:grid; place-items:center; width:48px; height:48px; flex-shrink:0; border-radius:12px; background:#f7931a; color:#fff; font-size:32px; }
+.yard-donation-grid { display:flex; align-items:center; flex-wrap:wrap; gap:24px; }
+.yard-donation-qr { background:#fff; border:1px solid var(--color-border); border-radius:12px; padding:24px; flex-shrink:0; max-width:100%; }
+.yard-donation-qr img { display:block; width:192px; max-width:100%; height:auto; }
+.yard-donation-details { flex:1 1 220px; min-width:0; }
+.yard-donation-address { display:block; overflow-wrap:anywhere; user-select:all; font-size:13px; line-height:1.8; padding:12px; margin:10px 0 16px; border:1px solid var(--color-border); border-radius:6px; background:var(--color-bg); }
+.yard-support .yard-copy-status { min-height:24px; margin:10px 0 0; font-size:11px; }
+.yard-support .yard-donation-note { margin:22px 0 0; }
 .yard-login { min-height:100dvh; display:grid; grid-template-columns:1.1fr 1fr; background:var(--color-surface); }
 .yard-login-story { background:var(--color-bg-alt); padding:50px; display:flex; flex-direction:column; justify-content:space-between; border-right:1px solid var(--color-border); }
 .yard-login-art { margin:70px 0; }
