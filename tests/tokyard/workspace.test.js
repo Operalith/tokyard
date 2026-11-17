@@ -40,6 +40,86 @@ test("validation rejects weak passwords, invalid budgets and duplicate emails", 
   await expect(w.saveProfile({ name: "Invalid", tokenLimit: -1 })).rejects.toThrow("Token allowance");
   await expect(w.updateWorkspaceUser(user.id, { isActive: "false" })).rejects.toThrow("boolean");
   await expect(w.updateWorkspaceUser(user.id, { tokenLimit: 1.5 })).rejects.toThrow("integer");
+  for (const dailyTokenLimit of [-1, 1.5, "100", true, 1_000_000_000_001]) {
+    await expect(w.saveProfile({ dailyTokenLimit }, "standard")).rejects.toThrow("Daily token allowance");
+    await expect(w.updateWorkspaceUser(user.id, { dailyTokenLimit })).rejects.toThrow("Daily token allowance");
+  }
+});
+
+test("daily allowance is atomic across keys and providers; monthly cap still applies", async () => {
+  await w.saveProfile({ dailyTokenLimit: 100 }, "standard");
+  const second = await w.createWorkspaceKey(user.id, "Desktop");
+  const results = await Promise.allSettled([w.reserveWorkspaceTokens(key.id, 60, "openai/test"), w.reserveWorkspaceTokens(second.id, 60, "claude/test")]);
+  expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+  expect((await w.getUserBudget(user.id)).daily).toMatchObject({ limit: 100, consumed: 0, reserved: 60, remaining: 40 });
+  const reservation = results.find(r => r.status === "fulfilled").value;
+  await w.settleWorkspaceTokens(reservation.id, 45);
+  await w.settleWorkspaceTokens(reservation.id, 45);
+  expect((await w.getUserBudget(user.id)).daily).toMatchObject({ consumed: 45, reserved: 0, remaining: 55 });
+  await expect(w.reserveWorkspaceTokens(second.id, 56, "claude/test")).rejects.toMatchObject({ status: 429, message: expect.stringContaining("Daily") });
+  expect((await w.getUserBudget(user.id)).reserved).toBe(0);
+  await w.updateWorkspaceUser(user.id, { tokenLimit: 50 });
+  await expect(w.reserveWorkspaceTokens(second.id, 6, "claude/test")).rejects.toThrow("Monthly");
+  expect((await w.getUserBudget(user.id)).daily.reserved).toBe(0);
+});
+
+test("daily profile changes preserve earlier usage and support per-person overrides and zero", async () => {
+  const reservation = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await w.settleWorkspaceTokens(reservation.id, 80);
+  expect((await w.getUserBudget(user.id)).daily).toMatchObject({ limit: null, consumed: 80, remaining: null });
+  await w.saveProfile({ dailyTokenLimit: 75 }, "standard");
+  expect((await w.getUserBudget(user.id)).daily.remaining).toBe(0);
+  await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Daily");
+  await w.updateWorkspaceUser(user.id, { dailyTokenLimit: 100 });
+  expect((await w.getUserBudget(user.id)).daily.remaining).toBe(20);
+  await w.saveProfile({ dailyTokenLimit: 90 }, "standard");
+  expect((await w.getWorkspaceUser(user.id)).dailyTokenLimit).toBe(100);
+  await w.updateWorkspaceUser(user.id, { dailyTokenLimit: null });
+  expect((await w.getUserBudget(user.id)).daily).toMatchObject({ limit: 90, remaining: 10 });
+  await w.updateWorkspaceUser(user.id, { dailyTokenLimit: 0 });
+  expect((await w.getUserBudget(user.id)).daily.limit).toBe(0);
+  await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Daily");
+  await w.saveProfile({ dailyTokenLimit: null }, "standard");
+  await w.updateWorkspaceUser(user.id, { dailyTokenLimit: null });
+  expect((await w.getUserBudget(user.id)).daily.limit).toBeNull();
+});
+
+test("UTC midnight resets daily usage; late settlement and uncertain holds stay on their original day", async () => {
+  await w.saveProfile({ dailyTokenLimit: 100 }, "standard");
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-17T23:59:59Z"));
+  const old = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await w.recoverWorkspaceReservations();
+  expect((await w.getUserBudget(user.id)).daily).toMatchObject({ reserved: 100, remaining: 0, resetsAt: "2026-11-18T00:00:00.000Z" });
+  vi.setSystemTime(new Date("2026-11-18T00:00:01Z"));
+  expect(await w.getUserBudget(user.id)).toMatchObject({ reserved: 100, daily: { consumed: 0, reserved: 0, remaining: 100, period: "2026-11-18" } });
+  const today = await w.reserveWorkspaceTokens(key.id, 100, "claude/test");
+  await w.settleWorkspaceTokens(old.id, 90, "manual", "Verified provider logs", "owner");
+  expect((await w.getUserBudget(user.id)).daily).toMatchObject({ consumed: 0, reserved: 100 });
+  await w.settleWorkspaceTokens(today.id, 120);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 210, reserved: 0, daily: { consumed: 120, reserved: 0, remaining: 0 } });
+  await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Daily");
+  vi.setSystemTime(new Date("2026-11-17T23:59:59Z"));
+  expect((await w.getUserBudget(user.id)).daily).toMatchObject({ consumed: 90, reserved: 0 });
+});
+
+test("schema 3 upgrade preserves keys, monthly counters and today's settled and held usage", async () => {
+  const settled = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await w.settleWorkspaceTokens(settled.id, 80);
+  await w.reserveWorkspaceTokens(key.id, 50, "claude/test");
+  db.exec("ALTER TABLE workspaceProfiles DROP COLUMN dailyTokenLimit");
+  db.exec("ALTER TABLE workspaceUsers DROP COLUMN dailyTokenLimit");
+  db.run("UPDATE _meta SET value = '3' WHERE key = 'backupSchemaVersion'");
+  db.close();
+  delete global._dbAdapter;
+  vi.resetModules();
+  w = await import("@/lib/workspace.js");
+  db = await w.ensureWorkspace();
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 80, reserved: 50, daily: { limit: null, consumed: 80, reserved: 50 } });
+  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("4");
+  expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
+  await w.saveProfile({ dailyTokenLimit: 130 }, "standard");
+  await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Daily");
 });
 
 test("parallel reservations and rotated keys share a single atomic allowance", async () => {

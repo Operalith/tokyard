@@ -2,7 +2,7 @@
 
 **Shared AI accounts. Individual token allowances.**
 
-TokYard is a self-hosted AI gateway for small teams. Connect provider accounts once, create people and access profiles, then give each person their own API keys and monthly token budget.
+TokYard is a self-hosted AI gateway for small teams. Connect provider accounts once, create people and access profiles, then give each person their own API keys, monthly token budget and optional daily cap.
 
 An independent MIT-licensed fork of [9router](https://github.com/decolua/9router), maintained by [Operalith](https://github.com/Operalith).
 
@@ -13,7 +13,7 @@ An independent MIT-licensed fork of [9router](https://github.com/decolua/9router
 ## What works
 
 - Owner and member sign-in, with separate permissions.
-- Profiles with monthly allowances, model allowlists, concurrency limits and output caps.
+- Profiles with monthly allowances, optional daily caps, model allowlists, concurrency limits and output caps.
 - Individual allowance overrides, immediate pause/resume and password resets by the owner.
 - Multiple API keys per person, sharing one allowance. Member secrets are shown once and stored as SHA-256 hashes.
 - Reservations before upstream calls, automatic settlement from provider-reported usage, and a request ledger.
@@ -63,7 +63,7 @@ Compose binds `127.0.0.1:20120` and stores data in the `tokyard-data` volume. Pu
 ## First workspace
 
 1. Open **Connections** and add your provider accounts. OAuth availability and account-sharing rules depend on the provider. A consumer subscription does not automatically grant API or resale rights.
-2. Open **Profiles** and set a monthly allowance, output cap, concurrency limit and optional model allowlist. Use exact `provider/model` identifiers. An empty allowlist permits all direct text models.
+2. Open **Profiles** and set a monthly allowance, optional daily allowance, output cap, concurrency limit and optional model allowlist. Leave the daily allowance empty for no daily cap; set it to `0` to stop new requests. Use exact `provider/model` identifiers. An empty allowlist permits all direct text models.
 3. Open **People & quotas**, add a person with their email and a temporary password of at least 12 characters, and assign a profile. Share credentials securely.
 4. Create an API key in that person's access panel, or let them sign in as **Member** and create their own. Member keys start with `ty_`.
 5. Configure their client with base URL `http://localhost:20120/v1` and their member key.
@@ -79,13 +79,15 @@ Use a model you connected and allowed. The example does not provision an OpenAI 
 
 ## How allowances work
 
-Allowances count **input + output tokens**, including cache input. Each user has one counter per UTC calendar month, shared across every one of their keys. Profile changes affect existing users unless an individual allowance override is set. Lowering a limit preserves earlier consumption and outstanding holds.
+Allowances count **input + output tokens**, including cache input. Each user has a monthly allowance and an optional daily cap, shared across every one of their keys and provider accounts. Every request must fit both limits. The same usage counts toward both periods; tokens are not charged twice. Profile changes affect existing users unless an individual allowance override is set. In **Edit access**, leave a personal limit empty to inherit the profile. Lowering a limit preserves earlier consumption and outstanding holds.
+
+Daily totals come from the existing request ledger, so enabling a daily cap includes usage and holds already recorded today. Existing profiles start without a daily cap. Unused daily allowance does not carry forward.
 
 Before dispatch, TokYard reserves a conservative text-input allowance (UTF-8 request bytes plus 2,048 tokens of overhead) and the clamped output allowance. The reservation is committed in a SQLite transaction before contacting a provider. Requests that do not fit receive **429**. Small remaining balances may not admit another request even when the final usage would be smaller.
 
 Reliable provider usage settles the reservation to its reported total. A request rejected locally before dispatch settles to zero. Missing usage, interruption, restart or more than one upstream attempt keeps the reservation **held for review**. The owner can reconcile held requests using provider logs and a recorded reason. Restart never automatically refunds unknown provider usage.
 
-A late response settles against its original month. Periods reset at 00:00 UTC on the first day of the month. The dashboard shows the latest 100 requests; older ledger rows remain in the database.
+A late response settles against its original day and month. Daily limits reset at 00:00 UTC; monthly limits reset at 00:00 UTC on the first day of the month. Holds from an earlier day still affect their original monthly allowance. The dashboard shows the latest 100 requests; older ledger rows remain in the database and count toward daily totals.
 
 This is admission control with conservative reservations, **not an external provider spending guarantee**. A provider may tokenize differently, inject context, ignore output caps or report more tokens than reserved. Reported totals are recorded even if that exceeds the current allowance; new requests then stop. Provider invoices and rate limits remain authoritative.
 

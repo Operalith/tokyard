@@ -69,7 +69,7 @@ try {
   await call("/v1/chat/completions", json({}), 401);
   const node = (await (await call("/api/provider-nodes", json({ name: "Local smoke provider", prefix: "smoke", apiType: "chat", baseUrl: `http://127.0.0.1:${mock.address().port}/v1` }, owner), 201)).json()).node;
   await call("/api/providers", json({ provider: node.id, name: "Mock account", apiKey: "local-test-only" }, owner), 201);
-  await call("/api/workspace/profiles/standard", json({ tokenLimit: 50000, maxOutputTokens: 100, allowedModels: ["smoke/test-model", "smoke/no-usage"] }, owner, "PATCH"));
+  await call("/api/workspace/profiles/standard", json({ tokenLimit: 50000, dailyTokenLimit: 10000, maxOutputTokens: 100, allowedModels: ["smoke/test-model", "smoke/no-usage"] }, owner, "PATCH"));
   const user = (await (await call("/api/workspace/users", json({ name: "Smoke member", email: "member@example.test", password }, owner), 201)).json()).user;
   const createKey = async name => (await (await call("/api/workspace/keys", json({ userId: user.id, name }, owner), 201)).json());
   const key = await createKey("First client"), key2 = await createKey("Second client");
@@ -81,13 +81,22 @@ try {
   const workspace = await (await call("/api/workspace", ownerGet)).json();
   assert.equal(workspace.users[0].budget.consumed, 60);
   assert.equal(workspace.users[0].budget.reserved, 0);
+  assert.equal(workspace.users[0].budget.daily.limit, 10000);
+  assert.equal(workspace.users[0].budget.daily.consumed, 60);
+  assert.equal(workspace.users[0].budget.daily.reserved, 0);
   assert.ok(workspace.requests.every(r => r.status === "settled"));
   await call(`/api/workspace/users/${user.id}`, json({ tokenLimit: 60 }, owner, "PATCH"));
   await call("/v1/chat/completions", inference(key2.key), 429);
   assert.equal(dispatched, 2, "Exhausted budget must block before the provider");
   await call(`/api/workspace/users/${user.id}`, json({ tokenLimit: null }, owner, "PATCH"));
+  await call(`/api/workspace/users/${user.id}`, json({ dailyTokenLimit: 60 }, owner, "PATCH"));
+  const dailyDenied = await call("/v1/chat/completions", inference(key2.key), 429);
+  assert.match((await dailyDenied.json()).error.message, /daily/i);
+  assert.equal(dispatched, 2, "Daily exhaustion must block before the provider");
+  await call(`/api/workspace/users/${user.id}`, json({ dailyTokenLimit: null }, owner, "PATCH"));
   const memberLogin = await call("/api/auth/login", json({ email: user.email, password }));
   const member = memberLogin.headers.get("set-cookie").split(";")[0];
+  await call(`/api/workspace/users/${user.id}`, json({ dailyTokenLimit: 999999 }, member, "PATCH"), 403);
   await call("/api/settings", { headers: { cookie: member } }, 403);
   await call("/api/headroom/status", { headers: { cookie: member } }, 403);
   const memberSaver = await fetch(`${base}/dashboard/token-saver`, { headers: { cookie: member }, redirect: "manual" });
@@ -109,6 +118,12 @@ try {
       await page.goto(`${base}/dashboard`);
       await heading("Shared access. Clear limits.");
       await visit("Profiles", "A policy for every team.");
+      await page.getByRole("button", { name: "Edit profile", exact: true }).click();
+      await page.getByLabel("Daily token allowance", { exact: false }).fill("5000");
+      await page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await page.getByRole("dialog").waitFor({ state: "hidden" });
+      await page.reload(); await heading("A policy for every team.");
+      assert.equal((await (await call("/api/workspace", ownerGet)).json()).profiles[0].dailyTokenLimit, 5000);
       await page.getByRole("link", { name: "Skip to content", exact: true }).focus();
       await page.keyboard.press("Enter");
       assert.equal(await page.evaluate(() => document.activeElement.id), "yard-main");
@@ -118,6 +133,17 @@ try {
       await page.goForward(); await heading("Every token, accounted for.");
       await page.reload(); await heading("Every token, accounted for.");
       await visit("People & quotas", "Shared access. Clear limits.");
+      await page.getByRole("button", { name: "Edit access", exact: true }).click();
+      await page.getByLabel("Personal daily allowance", { exact: false }).fill("4000");
+      await page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await page.getByRole("dialog").waitFor({ state: "hidden" });
+      await page.reload(); await heading("Shared access. Clear limits.");
+      assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "4000");
+      await page.getByRole("button", { name: "Edit access", exact: true }).click();
+      await page.getByLabel("Personal daily allowance", { exact: false }).fill("");
+      await page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await page.getByRole("dialog").waitFor({ state: "hidden" });
+      assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "5000");
       await nav.getByRole("link", { name: "Settings", exact: true }).click();
       await page.getByText(settings.databasePath, { exact: true }).waitFor();
       assert.ok(!(await page.locator("main").innerText()).includes("9router"));
@@ -158,11 +184,13 @@ try {
       await page.context().addCookies([{ name: "auth_token", value: member.slice("auth_token=".length), url: base }]);
       await page.goto(`${base}/dashboard`);
       await heading("Welcome, Smoke.");
+      assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "5000");
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Daily allowance must fit mobile width");
       assert.equal(await nav.getByRole("link", { name: "Token Saver", exact: true }).count(), 0);
       await page.goto(`${base}/dashboard/support`);
       await heading("Support TokYard with Bitcoin");
       assert.equal(await page.locator(".yard-donation-address").innerText(), bitcoinAddress);
-      console.log("Browser checks passed: navigation, Token Saver, tools, Bitcoin recipient/QR/clipboard/wallet link, mobile and member access.");
+      console.log("Browser checks passed: daily profile and personal limits, inheritance, navigation, Token Saver, tools, Bitcoin recipient/QR/clipboard/wallet link, mobile and member access.");
     } finally { await browser.close(); }
   }
   await call("/api/providers", { headers: { cookie: member } }, 403);
