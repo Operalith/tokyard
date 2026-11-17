@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replace external donation links with Bitcoin support: mainnet address, verified QR, clipboard action and wallet link.
 - Fix sidebar Profiles/Activity navigation, active states and browser history.
 - Restore Token Saver access and add an owner tools directory for inherited gateway features.
 - Show the actual database location, refresh visible branding and SAML defaults, and explain the alpha backup limitation.
