@@ -127,7 +127,9 @@ http.createServer = (...args) => {
 
 if (require.main === module) {
   process.env.PORT ||= "20120";
-  const standalone = path.join(__dirname, "server.js");
+  if (process.env.DATA_DIR) process.env.DATA_DIR = path.resolve(process.env.DATA_DIR);
+  const bundled = path.join(__dirname, "server.js");
+  const standalone = fs.existsSync(bundled) ? bundled : path.join(__dirname, ".next", "standalone", "server.js");
   if (fs.existsSync(standalone)) {
     require(standalone);
   } else {
