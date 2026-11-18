@@ -4,6 +4,8 @@ export default {
   version: 2,
   name: "shared-profile-budgets",
   up(db) {
+    // Pre-workspace databases have no ledger to backfill; schema sync creates their tables.
+    if (!db.all("PRAGMA table_info(workspaceRequests)").length) return;
     for (const [table, columns] of Object.entries({ workspaceProfiles: ["quotaMode", "sharedTokenLimit", "sharedDailyTokenLimit"], workspaceRequests: ["profileId"] })) {
       const existing = new Set(db.all(`PRAGMA table_info(${table})`).map(row => row.name));
       for (const column of columns) {
