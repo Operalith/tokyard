@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Postinstall: warm-up SQLite deps into ~/.9router/runtime so the first
+// Postinstall: warm-up SQLite deps into ~/.tokyard/runtime so the first
 // `9router` start doesn't need network. Failure here is non-fatal —
 // cli.js will retry at runtime if anything is missing.
 // `npx 9router …` (npm_command=exec) is typically a one-shot `connect` — skip

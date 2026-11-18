@@ -7,6 +7,7 @@
 - Restore Token Saver access and add an owner tools directory for inherited gateway features.
 - Show the actual database location, refresh visible branding and SAML defaults, and explain the alpha backup limitation.
 - Add browser regression checks for desktop/mobile navigation, Token Saver persistence and member access.
+- Keep every TokYard file in its own data directory (`DATA_DIR`, else `~/.tokyard`) and default the CLI to port 20120; MITM, updater, runtime and CLI files no longer go to `~/.9router`.
 
 ## 0.1.0-alpha.1
 
