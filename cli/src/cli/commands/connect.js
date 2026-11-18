@@ -18,8 +18,8 @@ Usage: 9router connect <server-url> [options]
 Configure CLI tools on THIS machine to use a remote 9router server.
 No local server is started. Run without installing:
 
-  npx 9router connect http://<server-host>:20128
-  npx 9router connect http://<server-host>:20128 --tools claude,codex,opencode
+  npx 9router connect http://<server-host>:20120
+  npx 9router connect http://<server-host>:20120 --tools claude,codex,opencode
 
 Options:
   --tools <list>         Comma-separated tools to configure (prompted if omitted
@@ -28,7 +28,7 @@ Options:
   --password <pw>        Dashboard password (or env NINE_ROUTER_PASSWORD;
                          prompted if omitted — preferred, keeps it out of shell history)
   --save                 After a successful login, save the password for this server
-                         to ~/.9router/connect.env (plain text, mode 600) so later
+                         to ~/.tokyard/connect.env (plain text, mode 600) so later
                          runs skip the prompt. Delete that file to forget it.
   --key-name <name>      API key name to reuse/create (default: cli-<hostname>)
   --api-key <key>        Use this API key, skip login + key lookup
@@ -45,8 +45,8 @@ Models come from the server's own CLI-tools config (set on its dashboard).
 Nothing is hardcoded: a Claude tier the server leaves unset is left unset,
 and a non-Claude tool with no model anywhere is skipped. Flags override:
 
-  npx 9router connect http://<server-host>:20128 --tools claude --sonnet cc/claude-sonnet-5-5
-  npx 9router connect http://<server-host>:20128 --tools codex,opencode --model ocg/deepseek-flash
+  npx 9router connect http://<server-host>:20120 --tools claude --sonnet cc/claude-sonnet-5-5
+  npx 9router connect http://<server-host>:20120 --tools codex,opencode --model ocg/deepseek-flash
 `;
 
 function parseArgs(argv) {
@@ -97,8 +97,8 @@ function maskKey(key) {
 function savedEnvPath() {
   if (process.env.DATA_DIR) return path.join(process.env.DATA_DIR, "connect.env");
   const base = process.platform === "win32"
-    ? path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "9router")
-    : path.join(os.homedir(), ".9router");
+    ? path.join(process.env.APPDATA || path.join(os.homedir(), "AppData", "Roaming"), "tokyard")
+    : path.join(os.homedir(), ".tokyard");
   return path.join(base, "connect.env");
 }
 

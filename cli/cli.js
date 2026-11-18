@@ -7,6 +7,9 @@ const https = require("https");
 const net = require("net");
 const os = require("os");
 
+// The server runs with cwd = bin/app; resolve once so the CLI and the server it spawns share one data dir.
+if (process.env.DATA_DIR) process.env.DATA_DIR = path.resolve(process.env.DATA_DIR);
+
 // Poll until the server accepts TCP connections on port, or timeout — avoids blind fixed waits.
 function waitServerReady(port, { timeoutMs = 15000, intervalMs = 150 } = {}) {
   const deadline = Date.now() + timeoutMs;
@@ -104,7 +107,7 @@ if (args[0] === "connect" || args[0] === "show") {
   return;
 }
 
-// Self-heal SQLite runtime deps (sql.js + better-sqlite3) into ~/.9router/runtime
+// Self-heal SQLite runtime deps (sql.js + better-sqlite3) into ~/.tokyard/runtime
 // so the server can resolve them via NODE_PATH. Best-effort — sql.js is required,
 // better-sqlite3 is optional. Logs to stderr only on failure.
 try { ensureSqliteRuntime({ silent: true }); } catch {}
@@ -116,7 +119,7 @@ try { ensureTrayRuntime({ silent: true }); } catch {}
 const APP_NAME = pkg.name; // Use from package.json
 const INSTALL_CMD_LATEST = `npm i -g ${APP_NAME}@latest --prefer-online`;
 
-const DEFAULT_PORT = 20128;
+const DEFAULT_PORT = 20120;
 const DEFAULT_HOST = "0.0.0.0";
 
 // First non-internal IPv4 — the address remote peers actually reach when bound to 0.0.0.0.
@@ -183,7 +186,7 @@ Options:
 
 Commands:
   connect <server-url> Configure Claude Code for a remote 9router server
-                      (npx 9router connect http://host:20128 — no install needed)
+                      (npx 9router connect http://host:20120 — no install needed)
   show [tool…]        Show each CLI tool's current 9router config and models
                       (e.g. 9router show claude)
   xai video --prompt "..." --output video.mp4
@@ -219,9 +222,10 @@ function compareVersions(a, b) {
 
 // Get app data dir (matches app/src/lib/dataDir.js convention)
 function getAppDataDir() {
+  if (process.env.DATA_DIR) return process.env.DATA_DIR;
   return process.platform === "win32"
-    ? path.join(process.env.APPDATA || "", "9router")
-    : path.join(os.homedir(), ".9router");
+    ? path.join(process.env.APPDATA || "", "tokyard")
+    : path.join(os.homedir(), ".tokyard");
 }
 
 // Kill PID from file (best-effort, removes file after)
@@ -913,7 +917,7 @@ function startServer(updatePromise) {
     if (restartCount >= MAX_RESTARTS) {
       console.error(`\n⚠️  Server crashed ${MAX_RESTARTS} times. Disabling MIT and restarting...`);
       try {
-        const dbPath = path.join(os.homedir(), process.platform === "win32" ? path.join("AppData", "Roaming", "9router", "db.json") : path.join(".9router", "db.json"));
+        const dbPath = path.join(getAppDataDir(), "db.json");
         if (fs.existsSync(dbPath)) {
           const db = JSON.parse(fs.readFileSync(dbPath, "utf-8"));
           if (db.settings) db.settings.mitmEnabled = false;

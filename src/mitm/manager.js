@@ -621,8 +621,10 @@ async function startServer(apiKey, sudoPassword, forceKillPort443 = false) {
   } else if (isSudoAvailable()) {
     // Pass HOME explicitly so os.homedir() resolves to the unprivileged user's home
     // instead of /root when sudo resets the environment.
+    // DATA_DIR too, so the MITM never falls back to a different data dir than the app's.
     const inlineCmd = [
       `HOME=${shellQuoteSingle(os.homedir())}`,
+      `DATA_DIR=${shellQuoteSingle(DATA_DIR)}`,
       `ROUTER_API_KEY=${shellQuoteSingle(apiKey)}`,
       `MITM_ROUTER_BASE=${shellQuoteSingle(mitmRouterBase)}`,
       "NODE_ENV=production",

@@ -378,8 +378,8 @@ describe("connect run()", () => {
     vi.stubEnv("APPDATA", path.join(home, "AppData", "Roaming"));
   };
   const expectedEnvPath = () => (process.platform === "win32"
-    ? path.join(home, "AppData", "Roaming", "9router", "connect.env")
-    : path.join(home, ".9router", "connect.env"));
+    ? path.join(home, "AppData", "Roaming", "tokyard", "connect.env")
+    : path.join(home, ".tokyard", "connect.env"));
 
   it("--save stores the password (mode 600) bound to the server, and later runs reuse it", async () => {
     isolateDataDir();

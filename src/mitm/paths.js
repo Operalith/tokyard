@@ -2,7 +2,8 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
-const APP_NAME = "9router";
+// Must match src/lib/dataDir.js (CommonJS copy for the standalone MITM server).
+const APP_NAME = "tokyard";
 
 function defaultDir() {
   if (process.platform === "win32") {

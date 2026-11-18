@@ -18,11 +18,11 @@ Dashboard/gateway (run from repo root):
 ```bash
 cp .env.example .env
 npm install
-PORT=20128 NEXT_PUBLIC_BASE_URL=http://localhost:20128 npm run dev   # dev (webpack, port 20127 by default via next dev)
-npm run build && PORT=20128 HOSTNAME=0.0.0.0 npm run start           # production
+npm run dev                                                         # dev (webpack, 127.0.0.1:20120)
+npm run build && PORT=20120 HOSTNAME=0.0.0.0 npm run start           # production
 ```
 - Bun variants: `npm run dev:bun` / `build:bun` / `start:bun`.
-- Default runtime port is **20128** (dashboard at `/dashboard`, API at `/v1`).
+- Default runtime port is **20120** (dashboard at `/dashboard`, API at `/v1`). The `cli/` launcher defaults to 20120 too; only upstream 9router uses 20128.
 - Lint: `npx eslint .` (config `eslint.config.mjs`, extends `eslint-config-next`).
 
 CLI package (`cli/`):
@@ -76,8 +76,8 @@ Two authoritative docs already exist — read them before working in these areas
 ### Persistence — IMPORTANT (ARCHITECTURE.md is stale here)
 State is **no longer `db.json`**. It's a SQLite layer under `src/lib/db/` with an adapter fallback chain (`driver.js`): `bun:sqlite` → `better-sqlite3` (optional native dep) → `node:sqlite` (Node ≥22.5) → `sql.js` (pure-JS fallback, always works). `better-sqlite3` is deliberately in `optionalDependencies` so install never fails without build tools.
 - `src/lib/localDb.js` is a **backward-compat shim** re-exporting `src/lib/db/index.js`. New code should import from `@/lib/db/index.js`; per-entity logic lives in `src/lib/db/repos/*`. Schema/migrations in `src/lib/db/migrations/`.
-- DB file location resolves via `src/lib/db/paths.js` (`DATA_DIR`, else `~/.9router/`).
-- Usage/logs (`src/lib/usageDb.js`, `usage.json` + `log.txt`) still live under `~/.9router` and do **not** follow `DATA_DIR`.
+- DB file location resolves via `src/lib/db/paths.js` (`DATA_DIR`, else `~/.tokyard/`, `%APPDATA%/tokyard` on Windows). Usage/logs are in the same SQLite DB (`src/lib/usageDb.js` is a shim).
+- Every data path must follow `src/lib/dataDir.js` (CommonJS copy: `src/mitm/paths.js`; CLI: `cli/cli.js`, `cli/hooks/sqliteRuntime.js`). Never write to `~/.9router`: TokYard runs alongside 9router with a separate data dir.
 
 ### RTK token saver (`open-sse/rtk/`)
 Pre-translate hooks that compress `tool_result` content in-place to cut tokens. **Fail-open**: any error returns null and leaves the body untouched — never throw out of them. Skips `is_error`/`status:"error"` results to preserve traces.
