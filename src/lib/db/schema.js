@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -167,6 +167,9 @@ export const TABLES = {
       name: "TEXT UNIQUE NOT NULL",
       tokenLimit: "INTEGER NOT NULL CHECK (tokenLimit >= 0)",
       dailyTokenLimit: "INTEGER CHECK (dailyTokenLimit >= 0)",
+      quotaMode: "TEXT NOT NULL DEFAULT 'fixed' CHECK (quotaMode IN ('fixed', 'shared'))",
+      sharedTokenLimit: "INTEGER CHECK (sharedTokenLimit >= 0)",
+      sharedDailyTokenLimit: "INTEGER CHECK (sharedDailyTokenLimit >= 0)",
       maxConcurrent: "INTEGER NOT NULL DEFAULT 2 CHECK (maxConcurrent >= 1)",
       maxOutputTokens: "INTEGER NOT NULL DEFAULT 4096 CHECK (maxOutputTokens >= 1)",
       allowedModels: "TEXT NOT NULL DEFAULT '[]'",
@@ -200,6 +203,7 @@ export const TABLES = {
     columns: {
       id: "TEXT PRIMARY KEY",
       userId: "TEXT NOT NULL REFERENCES workspaceUsers(id)",
+      profileId: "TEXT REFERENCES workspaceProfiles(id)",
       keyId: "TEXT NOT NULL REFERENCES apiKeys(id)",
       period: "TEXT NOT NULL",
       model: "TEXT NOT NULL",
@@ -213,6 +217,7 @@ export const TABLES = {
     },
     indexes: [
       "CREATE INDEX IF NOT EXISTS idx_wr_user_period ON workspaceRequests(userId, period)",
+      "CREATE INDEX IF NOT EXISTS idx_wr_profile_period ON workspaceRequests(profileId, period)",
       "CREATE INDEX IF NOT EXISTS idx_wr_status ON workspaceRequests(status, createdAt)",
     ],
   },
