@@ -24,9 +24,7 @@ test("raw usage trailer wins over synthetic finish-chunk estimates", async () =>
 test("incomplete Claude streams cannot settle placeholder output usage", async () => {
   const onUsage = vi.fn();
   await run('event: message_start\ndata: {"type":"message_start","message":{"id":"m1","usage":{"input_tokens":20,"output_tokens":1}}}\n\n', { targetFormat: FORMATS.CLAUDE, sourceFormat: FORMATS.OPENAI, onUsage });
-  // Only an input-only partial report (final=false); never a settleable final one.
-  expect(onUsage.mock.calls.filter(c => c[1] !== false)).toHaveLength(0);
-  expect(onUsage.mock.calls.at(-1)).toEqual([expect.objectContaining({ prompt_tokens: 20 }), false]);
+  expect(onUsage).not.toHaveBeenCalled();
 });
 test("Claude cache input and final output remain available before translation", async () => {
   const onUsage = vi.fn();
@@ -35,9 +33,8 @@ test("Claude cache input and final output remain available before translation", 
     { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 8 } },
   ].map(c => `data: ${JSON.stringify(c)}\n\n`).join("");
   await run(frames, { targetFormat: FORMATS.CLAUDE, sourceFormat: FORMATS.OPENAI, onUsage });
-  const final = onUsage.mock.calls.filter(c => c[1] !== false);
-  expect(final).toHaveLength(1);
-  expect(final[0][0]).toMatchObject({ prompt_tokens: 10, completion_tokens: 8, cache_read_input_tokens: 20, cache_creation_input_tokens: 5 });
+  expect(onUsage).toHaveBeenCalledOnce();
+  expect(onUsage.mock.calls[0][0]).toMatchObject({ prompt_tokens: 10, completion_tokens: 8, cache_read_input_tokens: 20, cache_creation_input_tokens: 5 });
 });
 test("diagnostics redact short secrets, cookies and provider credentials", () => {
   expect(maskSensitiveHeaders({ Authorization: "Bearer raw-key", "x-api-key": "short", Cookie: "auth_token=secret", "x-goog-api-key": "private", Accept: "application/json" })).toEqual({ Authorization: "[REDACTED]", "x-api-key": "[REDACTED]", Cookie: "[REDACTED]", "x-goog-api-key": "[REDACTED]", Accept: "application/json" });

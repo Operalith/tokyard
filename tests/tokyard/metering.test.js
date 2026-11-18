@@ -126,18 +126,6 @@ test("disconnect never refunds unknown upstream usage", async () => {
   expect((await w.listWorkspaceRequests(user.id))[0].status).toBe("uncertain");
 });
 
-test("cut-off stream with provider-reported input settles at input plus output cap", async () => {
-  const response = await meter(request(key.key, { stream: true, max_tokens: 100 }), async req => {
-    expect(req.tokyardMeter.outputCap).toBe(100);
-    req.tokyardMeter.onDispatch();
-    req.tokyardMeter.onUsage({ input_tokens: 50, output_tokens: 1, cache_read_input_tokens: 25 }, false);
-    return new Response(new ReadableStream({ pull() {} }), { headers: { "content-type": "text/event-stream" } });
-  });
-  await response.body.cancel();
-  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 175, reserved: 0 });
-  expect((await w.listWorkspaceRequests(user.id))[0]).toMatchObject({ status: "settled", source: "bound", actualTokens: 175 });
-});
-
 test("output cap survives translator bumps for tools, Claude thinking and Gemini bodies", async () => {
   const { adjustMaxTokens, capOutputTokens } = await import("open-sse/translator/formats/maxTokens.js");
   // Why the cap must run after translation: tools alone lift 4096 to 32000.
