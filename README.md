@@ -63,7 +63,7 @@ Compose binds `127.0.0.1:20120` and stores data in the `tokyard-data` volume. Pu
 ## First workspace
 
 1. Open **Connections** and add your provider accounts. OAuth availability and account-sharing rules depend on the provider. A consumer subscription does not automatically grant API or resale rights.
-2. Open **Profiles** and set a monthly allowance, optional daily allowance, output cap, concurrency limit and optional model allowlist. Leave the daily allowance empty for no daily cap; set it to `0` to stop new requests. Use exact `provider/model` identifiers. An empty allowlist permits all direct text models.
+2. Open **Profiles** and set a monthly allowance, optional daily allowance, output cap, concurrency limit and optional model allowlist. Leave the daily allowance empty for no daily cap; set it to `0` to stop new requests. In **Allowed models**, uncheck **Allow all direct text models**, search your active connections' direct text models and select up to 200. Saved selections remain visible if a connection becomes unavailable. Check **Allow all direct text models** to remove the model restriction.
 3. Open **People & quotas**, add a person with their email and a temporary password of at least 12 characters, and assign a profile. Share credentials securely.
 4. Create an API key in that person's access panel, or let them sign in as **Member** and create their own. Member keys start with `ty_`.
 5. Configure their client with base URL `http://localhost:20120/v1` and their member key.

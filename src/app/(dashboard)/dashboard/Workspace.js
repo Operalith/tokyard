@@ -23,6 +23,39 @@ function Dialog({ title, onClose, children }) {
   useEffect(() => { const dialog = ref.current; dialog.showModal(); return () => dialog.close(); }, []);
   return <dialog className="yard-dialog" ref={ref} aria-labelledby="yard-dialog-title" onCancel={onClose} onClick={e => { if (e.target === ref.current) onClose(); }}><div className="yard-dialog-head"><h2 id="yard-dialog-title">{title}</h2><button aria-label="Close dialog" onClick={onClose}>×</button></div>{children}</dialog>;
 }
+function AllowedModels({ initialModels = [] }) {
+  const [selected, setSelected] = useState(initialModels), [all, setAll] = useState(!initialModels.length);
+  const [groups, setGroups] = useState(null), [error, setError] = useState(""), [query, setQuery] = useState("");
+  const [retry, setRetry] = useState(0);
+  const mode = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    setGroups(null); setError("");
+    api("/api/workspace/models").then(data => { if (!cancelled) setGroups(data.groups); }).catch(err => { if (!cancelled) setError(err.message); });
+    return () => { cancelled = true; };
+  }, [retry]);
+  useEffect(() => { mode.current.setCustomValidity(!all && !selected.length ? "Select at least one model or allow all direct text models." : ""); }, [all, selected]);
+  const known = new Set((groups || []).flatMap(g => g.models));
+  const saved = selected.filter(id => !known.has(id));
+  const choices = [...(saved.length ? [{ name: groups ? "Previously selected · unavailable on active connections" : "Saved selections", alias: "saved", models: saved }] : []), ...(groups || [])];
+  const search = query.trim().toLowerCase();
+  const visible = choices.map(g => ({ ...g, models: g.models.filter(id => `${g.name} ${id}`.toLowerCase().includes(search)) })).filter(g => g.models.length);
+  return <fieldset className="yard-model-picker">
+    <legend>Allowed models</legend>
+    <label className="yard-model-option"><input ref={mode} type="checkbox" checked={all} onChange={e => setAll(e.target.checked)}/><span>Allow all direct text models</span></label>
+    <small>Uncheck to choose models from your active connections.</small>
+    {!all && <>
+      <div className="yard-model-toolbar"><label className="yard-field"><span className="sr-only">Search available models</span><input type="search" placeholder="Search model or provider…" value={query} onChange={e => setQuery(e.target.value)}/></label><small role="status">{selected.length} / 200 selected</small></div>
+      {error ? <div role="alert"><p>Could not load available models. Saved selections are preserved.</p><button type="button" className="yard-text-button" onClick={() => setRetry(n => n + 1)}>Retry loading models</button></div> : groups === null && <p role="status">Loading available models…</p>}
+      <div className="yard-model-list" role="group" aria-label="Available models">
+        {visible.map(group => <div className="yard-model-group" key={group.alias}><h3>{group.name}</h3>{group.models.map(id => <label className="yard-model-option" key={id}><input type="checkbox" checked={selected.includes(id)} disabled={!selected.includes(id) && selected.length >= 200} onChange={e => setSelected(ids => e.target.checked ? [...ids, id] : ids.filter(value => value !== id))}/><span><strong>{id.slice(id.indexOf("/") + 1)}</strong><code>{id}</code></span></label>)}</div>)}
+        {groups !== null && !visible.length && <p>{search ? "No models match your search." : "No models available. Add or enable connections and configure their models in Connections."}</p>}
+      </div>
+      <small>Saved models stay selected if their connection becomes unavailable.</small>
+    </>}
+    {(all ? [] : selected).map(id => <input key={id} type="hidden" name="allowedModels" value={id}/>)}
+  </fieldset>;
+}
 export default function Workspace() {
   const [data, setData] = useState(null), [error, setError] = useState("");
   const [selected, setSelected] = useState(null), [keys, setKeys] = useState([]);
@@ -58,7 +91,8 @@ export default function Workspace() {
   };
   const submit = async event => {
     event.preventDefault();
-    const values = Object.fromEntries(new FormData(event.currentTarget));
+    const form = new FormData(event.currentTarget);
+    const values = Object.fromEntries(form);
     try {
       if (modal.type === "user") {
         const result = await mutate("/api/workspace/users", "POST", values); setSelected(result.user.id);
@@ -67,7 +101,7 @@ export default function Workspace() {
         if (values.password) patch.password = values.password;
         await mutate(`/api/workspace/users/${user.id}`, "PATCH", patch);
       } else if (modal.type === "profile") {
-        await mutate(`/api/workspace/profiles${modal.profile ? `/${modal.profile.id}` : ""}`, modal.profile ? "PATCH" : "POST", { ...values, tokenLimit: Number(values.tokenLimit), dailyTokenLimit: values.dailyTokenLimit === "" ? null : Number(values.dailyTokenLimit), maxConcurrent: Number(values.maxConcurrent), maxOutputTokens: Number(values.maxOutputTokens), allowedModels: values.allowedModels.split(/\n/).map(s => s.trim()).filter(Boolean) });
+        await mutate(`/api/workspace/profiles${modal.profile ? `/${modal.profile.id}` : ""}`, modal.profile ? "PATCH" : "POST", { ...values, tokenLimit: Number(values.tokenLimit), dailyTokenLimit: values.dailyTokenLimit === "" ? null : Number(values.dailyTokenLimit), maxConcurrent: Number(values.maxConcurrent), maxOutputTokens: Number(values.maxOutputTokens), allowedModels: form.getAll("allowedModels") });
       } else if (modal.type === "key") {
         const result = await mutate("/api/workspace/keys", "POST", { name: values.name, userId: user.id }); setSecret(result); setCopied(false);
       } else if (modal.type === "reconcile") {
@@ -95,7 +129,7 @@ export default function Workspace() {
     <footer className="yard-footer"><span>TokYard · Built for shared AI access.</span><Link href="/dashboard/support">Keep the yard growing <YardIcon name="support" size={13}/></Link></footer>
     {modal && <Dialog title={{ user: "Add a person", edit: "Edit access", profile: profile ? "Edit profile" : "New profile", key: "Create API key", reconcile: "Reconcile held request" }[modal.type]} onClose={() => setModal(null)}><form onSubmit={submit} className="yard-form">
       {(modal.type === "user" || modal.type === "edit") && <><Field label="Full name"><input name="name" required maxLength={120} defaultValue={modal.type === "edit" ? user.name : ""} autoComplete="off" autoFocus/></Field>{modal.type === "user" && <Field label="Email"><input name="email" type="email" required maxLength={254} autoComplete="off"/></Field>}<Field label={modal.type === "edit" ? "New password (optional)" : "Temporary password"} hint="At least 12 characters, at most 72 UTF-8 bytes. Share securely."><input name="password" type="password" required={modal.type === "user"} minLength={12} autoComplete="new-password"/></Field><Field label="Access profile"><select name="profileId" defaultValue={modal.type === "edit" ? user.profileId : "standard"}>{data.profiles.map(p => <option key={p.id} value={p.id}>{p.name} · {compact(p.tokenLimit)} / month</option>)}</select></Field>{modal.type === "edit" && <Field label="Personal monthly allowance" hint="Leave empty to inherit the profile. Set 0 to stop new requests."><input name="tokenLimit" type="number" min="0" max="1000000000000" step="1" defaultValue={user.tokenLimitOverride ?? ""}/></Field>}{modal.type === "edit" && <Field label="Personal daily allowance" hint="Leave empty to inherit the profile. Set 0 to stop new requests. Resets at 00:00 UTC."><input name="dailyTokenLimit" type="number" min="0" max="1000000000000" step="1" defaultValue={user.dailyTokenLimitOverride ?? ""}/></Field>}</>}
-      {modal.type === "profile" && <><Field label="Profile name"><input name="name" required maxLength={60} defaultValue={profile?.name || ""} autoFocus/></Field><Field label="Monthly token allowance" hint="Total for this month, not extra credit. Used and held tokens remain. Personal overrides take priority."><input name="tokenLimit" type="number" required min="0" max="1000000000000" step="1" defaultValue={profile?.tokenLimit ?? 1000000}/></Field><Field label="Daily token allowance" hint="Optional. Leave empty for no daily cap. Set 0 to stop new requests. Resets at 00:00 UTC."><input name="dailyTokenLimit" type="number" min="0" max="1000000000000" step="1" defaultValue={profile?.dailyTokenLimit ?? ""}/></Field><div className="yard-form-pair"><Field label="Concurrent requests"><input name="maxConcurrent" type="number" required min="1" max="20" step="1" defaultValue={profile?.maxConcurrent ?? 2}/></Field><Field label="Output tokens / request"><input name="maxOutputTokens" type="number" required min="1" max="32768" step="1" defaultValue={profile?.maxOutputTokens ?? 4096}/></Field></div><Field label="Allowed models" hint="One provider/model identifier per line. Empty allows all direct text models."><textarea name="allowedModels" rows={4} placeholder="openai/gpt-4.1-mini" defaultValue={profile?.allowedModels.join("\n") || ""}/></Field></>}
+      {modal.type === "profile" && <><Field label="Profile name"><input name="name" required maxLength={60} defaultValue={profile?.name || ""} autoFocus/></Field><Field label="Monthly token allowance" hint="Total for this month, not extra credit. Used and held tokens remain. Personal overrides take priority."><input name="tokenLimit" type="number" required min="0" max="1000000000000" step="1" defaultValue={profile?.tokenLimit ?? 1000000}/></Field><Field label="Daily token allowance" hint="Optional. Leave empty for no daily cap. Set 0 to stop new requests. Resets at 00:00 UTC."><input name="dailyTokenLimit" type="number" min="0" max="1000000000000" step="1" defaultValue={profile?.dailyTokenLimit ?? ""}/></Field><div className="yard-form-pair"><Field label="Concurrent requests"><input name="maxConcurrent" type="number" required min="1" max="20" step="1" defaultValue={profile?.maxConcurrent ?? 2}/></Field><Field label="Output tokens / request"><input name="maxOutputTokens" type="number" required min="1" max="32768" step="1" defaultValue={profile?.maxOutputTokens ?? 4096}/></Field></div><AllowedModels key={profile?.id || "new"} initialModels={profile?.allowedModels}/></>}
       {modal.type === "key" && <><p>New key for <strong>{user.name}</strong>. Secret appears once. Store it securely.</p><Field label="Key name"><input name="name" placeholder="e.g. Work laptop" required maxLength={80} autoFocus/></Field></>}
       {modal.type === "reconcile" && <><p>{modal.request.model} · {number(modal.request.reservedTokens)} tokens held.</p><Field label="Verified total tokens" hint="Input + output, including cache tokens. Use provider logs to verify."><input name="actualTokens" type="number" required min="0" max="1000000000000" step="1" autoFocus/></Field><Field label="Reason for reconciliation"><textarea name="reason" required minLength={3} maxLength={2000} rows={3}/></Field></>}
       {error && <p className="yard-error" role="alert">{error}</p>}<div className="yard-form-actions"><button type="button" className="yard-button" onClick={() => setModal(null)}>Cancel</button><button className="yard-button primary" disabled={busy}>{busy ? "Saving…" : modal.type === "user" ? "Add person" : modal.type === "key" ? "Create key" : "Save changes"}</button></div>
