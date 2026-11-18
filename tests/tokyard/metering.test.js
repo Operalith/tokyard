@@ -159,9 +159,21 @@ test("output cap survives translator bumps for tools, Claude thinking and Gemini
   expect(capOutputTokens({ max_tokens: 32000, max_completion_tokens: 32000 }, 4096)).toEqual({ max_tokens: 4096, max_completion_tokens: 4096 });
   expect(capOutputTokens({ max_tokens: 101024, thinking: { type: "enabled", budget_tokens: 100000 } }, 4096)).toEqual({ max_tokens: 4096, thinking: { type: "enabled", budget_tokens: 3072 } });
   expect(capOutputTokens({ max_tokens: 64000, thinking: { type: "enabled", budget_tokens: 10000 } }, 1024)).toEqual({ max_tokens: 1024 });
+  // Gemini's maxOutputTokens includes thinking, so the budget is left as sent (forcing it could undercut model minimums).
   expect(capOutputTokens({ request: { generationConfig: { maxOutputTokens: 64000, thinkingConfig: { thinkingBudget: -1 } } } }, 4096))
-    .toEqual({ request: { generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: 4096 } } } });
+    .toEqual({ request: { generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: -1 } } } });
   expect(capOutputTokens({ max_output_tokens: 10 }, 4096)).toEqual({ max_output_tokens: 10 });
+});
+
+test("a metered cap sent as max_completion_tokens reaches Gemini, Antigravity and Ollama", async () => {
+  const { openaiToGeminiRequest, openaiToAntigravityRequest } = await import("open-sse/translator/request/openai-to-gemini.js");
+  const { openaiToOllamaRequest } = await import("open-sse/translator/request/openai-to-ollama.js");
+  // Metering keeps the client's field name; these translators used to read only max_tokens and send no limit at all.
+  const body = () => ({ model: "gemini-2.5-flash", messages: [{ role: "user", content: "Hi" }], max_completion_tokens: 100 });
+  expect(openaiToGeminiRequest("gemini-2.5-flash", body(), false).generationConfig.maxOutputTokens).toBe(100);
+  expect(openaiToAntigravityRequest("gemini-2.5-flash", body(), false, { email: "member@example.com" }).request.generationConfig.maxOutputTokens).toBe(100);
+  expect(openaiToOllamaRequest("llama3", body(), false).options.num_predict).toBe(100);
+  expect(openaiToGeminiRequest("gemini-2.5-flash", { ...body(), max_tokens: 50 }, false).generationConfig.maxOutputTokens).toBe(50);
 });
 
 test("token-dense input is rejected at admission instead of overspending the allowance", async () => {

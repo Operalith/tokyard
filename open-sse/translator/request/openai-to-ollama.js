@@ -31,10 +31,11 @@ export function openaiToOllamaRequest(model, body, stream) {
     result.options.temperature = body.temperature;
   }
 
-  // Max tokens (Ollama uses num_predict)
-  if (body.max_tokens !== undefined) {
+  // Max tokens (Ollama uses num_predict); OpenAI clients may send either name
+  const maxTokens = body.max_tokens ?? body.max_completion_tokens;
+  if (maxTokens !== undefined) {
     result.options = result.options || {};
-    result.options.num_predict = body.max_tokens;
+    result.options.num_predict = maxTokens;
   }
 
   // Top_p

@@ -44,12 +44,9 @@ export function capOutputTokens(body, cap) {
     for (const field of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) {
       if (typeof target[field] === "number" && target[field] > cap) target[field] = cap;
     }
+    // Gemini's maxOutputTokens already includes thinking tokens, so thinkingBudget is left untouched.
     const config = target.generationConfig;
-    if (config && typeof config === "object") {
-      if (typeof config.maxOutputTokens === "number" && config.maxOutputTokens > cap) config.maxOutputTokens = cap;
-      const budget = config.thinkingConfig?.thinkingBudget;
-      if (typeof budget === "number" && (budget < 0 || budget > cap)) config.thinkingConfig.thinkingBudget = cap;
-    }
+    if (typeof config?.maxOutputTokens === "number" && config.maxOutputTokens > cap) config.maxOutputTokens = cap;
   }
   // Claude requires budget_tokens (min 1024) < max_tokens; drop thinking when the cap leaves no room.
   const thinking = body.thinking;
