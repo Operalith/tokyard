@@ -63,7 +63,7 @@ export async function meterWorkspaceChat(request, dispatch) {
     if (body.stream === true && path.endsWith("/chat/completions")) body.stream_options = { ...body.stream_options, include_usage: true };
     reservation = await reserveWorkspaceTokens(key.id, inputBound + output, body.model);
     context = {
-      keyId: key.id, dispatches: 0, usage: null,
+      keyId: key.id, dispatches: 0, usage: null, outputCap: output,
       onDispatch() { this.dispatches += 1; },
       onUsage(usage) {
         if (usage?.estimated) return;

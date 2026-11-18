@@ -334,6 +334,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       apiKey: request?.tokyardMeter?.keyId || apiKey,
       onUsage: request?.tokyardMeter ? (usage) => request.tokyardMeter.onUsage(usage) : undefined,
       onDispatch: request?.tokyardMeter ? () => request.tokyardMeter.onDispatch() : undefined,
+      outputTokenCap: request?.tokyardMeter?.outputCap,
       ccFilterNaming: !!chatSettings.ccFilterNaming,
       rtkEnabled: !!chatSettings.rtkEnabled,
       headroomEnabled: !!chatSettings.headroomEnabled,

@@ -183,6 +183,26 @@ test("dashboard login, authorization and logout leave 9router cookies untouched"
   expect((await proxy(dashboard)).status).toBe(307);
 });
 
+test("member logins cannot reset the owner lockout and respect tunnel blocking", async () => {
+  vi.doMock("next/headers", () => ({ cookies: async () => ({ get() {}, set() {}, delete() {} }) }));
+  const previous = process.env.INITIAL_PASSWORD;
+  process.env.INITIAL_PASSWORD = "owner-password-123";
+  try {
+    const { POST } = await import("@/app/api/auth/login/route.js");
+    const login = (body, host = "localhost") => POST(new Request(`http://${host}/api/auth/login`, { method: "POST", headers: { "content-type": "application/json", host }, body: JSON.stringify(body) }));
+    for (let i = 0; i < 4; i++) expect((await login({ password: "wrong-password-xyz" })).status).toBe(401);
+    expect((await login({ email: "member@example.com", password: "test-password-123" })).status).toBe(200);
+    expect((await login({ password: "wrong-password-xyz" })).status).toBe(429);
+    expect((await login({ password: "owner-password-123" })).status).toBe(429);
+    const { updateSettings } = await import("@/lib/localDb");
+    await updateSettings({ tunnelUrl: "https://tunnel.example.com", tunnelDashboardAccess: false });
+    expect((await login({ email: "member@example.com", password: "test-password-123" }, "tunnel.example.com")).status).toBe(403);
+  } finally {
+    if (previous === undefined) delete process.env.INITIAL_PASSWORD; else process.env.INITIAL_PASSWORD = previous;
+    vi.doUnmock("next/headers");
+  }
+});
+
 test("profile edits apply to existing keys and individual overrides remain explicit", async () => {
   const { getApiKeyByKey } = await import("@/lib/db/repos/apiKeysRepo.js");
   await w.saveProfile({ tokenLimit: 500, allowedModels: ["openai/test"] }, "standard");

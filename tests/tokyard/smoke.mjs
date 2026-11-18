@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 const root = process.cwd();
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "tokyard-smoke-"));
 const password = randomBytes(24).toString("base64url");
-let server, logs = "", dispatched = 0;
+let server, logs = "", dispatched = 0, lastBody = null;
 const mock = http.createServer(async (req, res) => {
   if (req.method === "GET" && req.url === "/v1/models") {
     res.writeHead(200, { "Content-Type": "application/json" });
@@ -22,6 +22,7 @@ const mock = http.createServer(async (req, res) => {
   for await (const chunk of req) raw += chunk;
   const body = JSON.parse(raw);
   dispatched++;
+  lastBody = body;
   const usage = { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 };
   if (body.stream) {
     res.writeHead(200, { "Content-Type": "text/event-stream" });
@@ -131,6 +132,10 @@ try {
   assert.match((await poolDenied.json()).error.message, /shared profile pool/);
   assert.equal(dispatched, 4, "Shared pool exhaustion must block before dispatch");
   await call("/api/workspace/profiles/standard", json({ quotaMode: "fixed" }, owner, "PATCH"));
+  // Claude->OpenAI translation lifts max_tokens to 32000 when tools are present; the metered cap must survive it.
+  await call("/v1/messages", { method: "POST", headers: { "Content-Type": "application/json", "x-api-key": key2.key }, body: JSON.stringify({ model: "smoke/test-model", max_tokens: 50, messages: [{ role: "user", content: "Hello" }], tools: [{ name: "lookup", description: "Look up", input_schema: { type: "object", properties: {} } }] }) });
+  assert.equal(dispatched, 5);
+  assert.equal(lastBody.max_tokens ?? lastBody.max_completion_tokens, 50, "Upstream output cap must equal the metered reservation");
   const memberLogin = await call("/api/auth/login", json({ email: user.email, password }));
   const member = memberLogin.headers.get("set-cookie").split(";")[0];
   await call("/api/workspace/models", { headers: { cookie: member } }, 403);
@@ -291,8 +296,10 @@ try {
       await heading("Welcome, Smoke.");
       assert.equal(await page.getByRole("meter", { name: "Shared daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "6000");
       const memberPool = await (await page.request.get(`${base}/api/workspace`)).json();
-      assert.equal(memberPool.budget.shared.consumed, 120);
-      assert.equal(memberPool.budget.available, 4910);
+      // 5 settled mock requests × 30 tokens: the member's 4 (incl. the /v1/messages cap check) + the teammate's 1.
+      assert.equal(memberPool.budget.shared.consumed, 150);
+      // Tighter of personal daily (5000 − member's 120) and shared daily (6000 − 150).
+      assert.equal(memberPool.budget.available, 4880);
       assert.equal(memberPool.users, undefined, "Members must see aggregate pool usage without other members' records");
       assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "5000");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Daily allowance must fit mobile width");
@@ -325,7 +332,7 @@ try {
   await call(`/api/workspace/users/${user.id}`, json({ isActive: false }, owner, "PATCH"));
   await call("/v1/chat/completions", inference(key2.key), 401);
   await call("/api/workspace", { headers: { cookie: member } }, 401);
-  assert.equal(dispatched, 5);
+  assert.equal(dispatched, 6);
   console.log("TokYard smoke passed: production login, pooled provider, JSON + SSE usage, shared quota, profile increase after exhaustion without restart, rejection before dispatch, role/ownership/CSRF gates, held reconciliation, revoke and pause.");
 } catch (error) {
   console.error(error.message);

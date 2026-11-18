@@ -21,8 +21,11 @@ function isTunnelRequest(request, settings) {
 
 export async function POST(request) {
   try {
+    const { password, email } = await request.json();
+    // Separate buckets: a member's successful login must never clear failed owner-password attempts.
     const ip = getClientIp(request);
-    const lock = checkLock(ip);
+    const bucket = email === undefined ? ip : `member:${ip}`;
+    const lock = checkLock(bucket);
     if (lock.locked) {
       return NextResponse.json(
         { error: `Too many failed attempts. Try again in ${lock.retryAfter}s. ${RESET_HINT}`, retryAfter: lock.retryAfter, resetHint: RESET_HINT },
@@ -30,25 +33,25 @@ export async function POST(request) {
       );
     }
 
-    const { password, email } = await request.json();
     if (typeof password !== "string" || Buffer.byteLength(password) > 72) {
       return NextResponse.json({ error: "Invalid credentials" }, { status: 400 });
     }
+    const settings = await getSettings();
+
+    // Block login via tunnel/tailscale if dashboard access is disabled (owner and members alike)
+    if (isTunnelRequest(request, settings) && settings.tunnelDashboardAccess !== true) {
+      return NextResponse.json({ error: "Dashboard access via tunnel is disabled" }, { status: 403 });
+    }
+
     if (email !== undefined) {
       const user = await authenticateWorkspaceUser(email, password);
       if (!user) {
-        recordFail(ip);
+        recordFail(bucket);
         return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
       }
-      recordSuccess(ip);
+      recordSuccess(bucket);
       await setDashboardAuthCookie(await cookies(), request, { role: "member", userId: user.id, authVersion: user.authVersion });
       return NextResponse.json({ success: true }, { headers: NO_STORE_HEADERS });
-    }
-    const settings = await getSettings();
-
-    // Block login via tunnel/tailscale if dashboard access is disabled
-    if (isTunnelRequest(request, settings) && settings.tunnelDashboardAccess !== true) {
-      return NextResponse.json({ error: "Dashboard access via tunnel is disabled" }, { status: 403 });
     }
 
     // Default password is '123456' if not set

@@ -152,6 +152,40 @@ test("disconnect never refunds unknown upstream usage", async () => {
   expect((await w.listWorkspaceRequests(user.id))[0].status).toBe("uncertain");
 });
 
+test("output cap survives translator bumps for tools, Claude thinking and Gemini bodies", async () => {
+  const { adjustMaxTokens, capOutputTokens } = await import("open-sse/translator/formats/maxTokens.js");
+  // Why the cap must run after translation: tools alone lift 4096 to 32000.
+  expect(adjustMaxTokens({ max_tokens: 4096, tools: [{}] }, 128000)).toBe(32000);
+  expect(capOutputTokens({ max_tokens: 32000, max_completion_tokens: 32000 }, 4096)).toEqual({ max_tokens: 4096, max_completion_tokens: 4096 });
+  expect(capOutputTokens({ max_tokens: 101024, thinking: { type: "enabled", budget_tokens: 100000 } }, 4096)).toEqual({ max_tokens: 4096, thinking: { type: "enabled", budget_tokens: 3072 } });
+  expect(capOutputTokens({ max_tokens: 64000, thinking: { type: "enabled", budget_tokens: 10000 } }, 1024)).toEqual({ max_tokens: 1024 });
+  // Gemini's maxOutputTokens includes thinking, so the budget is left as sent (forcing it could undercut model minimums).
+  expect(capOutputTokens({ request: { generationConfig: { maxOutputTokens: 64000, thinkingConfig: { thinkingBudget: -1 } } } }, 4096))
+    .toEqual({ request: { generationConfig: { maxOutputTokens: 4096, thinkingConfig: { thinkingBudget: -1 } } } });
+  expect(capOutputTokens({ max_output_tokens: 10 }, 4096)).toEqual({ max_output_tokens: 10 });
+});
+
+test("a metered cap sent as max_completion_tokens reaches Gemini, Antigravity and Ollama", async () => {
+  const { openaiToGeminiRequest, openaiToAntigravityRequest } = await import("open-sse/translator/request/openai-to-gemini.js");
+  const { openaiToOllamaRequest } = await import("open-sse/translator/request/openai-to-ollama.js");
+  // Metering keeps the client's field name; these translators used to read only max_tokens and send no limit at all.
+  const body = () => ({ model: "gemini-2.5-flash", messages: [{ role: "user", content: "Hi" }], max_completion_tokens: 100 });
+  expect(openaiToGeminiRequest("gemini-2.5-flash", body(), false).generationConfig.maxOutputTokens).toBe(100);
+  expect(openaiToAntigravityRequest("gemini-2.5-flash", body(), false, { email: "member@example.com" }).request.generationConfig.maxOutputTokens).toBe(100);
+  expect(openaiToOllamaRequest("llama3", body(), false).options.num_predict).toBe(100);
+  expect(openaiToGeminiRequest("gemini-2.5-flash", { ...body(), max_tokens: 50 }, false).generationConfig.maxOutputTokens).toBe(50);
+});
+
+test("token-dense input is rejected at admission instead of overspending the allowance", async () => {
+  await w.saveProfile({ tokenLimit: 25000 }, "standard");
+  // "aA" never merges under cl100k_base: 40,000 content bytes are 40,000 tokens, so only a byte bound is safe.
+  const dispatch = vi.fn();
+  const response = await meter(request(key.key, { model: "openai/gpt-4-turbo", messages: [{ role: "user", content: "aA".repeat(20000) }], max_tokens: 1 }), dispatch);
+  expect(response.status).toBe(429);
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 0, reserved: 0 });
+});
+
 test("local rejection releases reservation; failed or retried upstream stays held", async () => {
   await meter(request(key.key), async () => Response.json({ error: "No credentials" }, { status: 404 }));
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 0, reserved: 0 });
