@@ -77,6 +77,32 @@ test.each(["tokenLimit", "dailyTokenLimit"])("increasing profile %s immediately 
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 20000, reserved: 0 });
 });
 
+test.each(["sharedTokenLimit", "sharedDailyTokenLimit"])("output fits %s and pool rejection explains the limiting balance", async field => {
+  await w.saveProfile({ quotaMode: "shared", sharedTokenLimit: 5000, sharedDailyTokenLimit: 5000, [field]: 3000 }, "standard");
+  const other = await w.createWorkspaceUser({ name: "Other", email: "other@example.test", password: "test-password-123" });
+  const otherKey = await w.createWorkspaceKey(other.id, "Other client");
+  const previous = await w.reserveWorkspaceTokens(otherKey.id, 500, "openai/test");
+  await w.settleWorkspaceTokens(previous.id, 500);
+  const before = await w.getUserBudget(user.id);
+  expect(before.available).toBe(2500);
+  const req = request(key.key, { max_tokens: 99999 });
+  const inputBound = Buffer.byteLength(await req.clone().text()) + 2048;
+  const response = await meter(req, async metered => {
+    expect((await metered.json()).max_tokens).toBe(2500 - inputBound);
+    metered.tokyardMeter.onDispatch();
+    metered.tokyardMeter.onUsage({ prompt_tokens: 20, completion_tokens: 10 });
+    return Response.json({});
+  });
+  expect(response.status).toBe(200);
+  expect((await w.getUserBudget(user.id)).available).toBe(2470);
+  const dispatch = vi.fn();
+  const denied = await meter(request(key.key, { messages: [{ role: "user", content: "x".repeat(1000) }] }), dispatch);
+  expect(denied.status).toBe(429);
+  const message = (await denied.json()).error.message;
+  for (const detail of [field === "sharedTokenLimit" ? "monthly" : "daily", "shared profile pool", "3000", "530", "2470"]) expect(message).toContain(detail);
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
 test("insufficient balance explains the updated limit, used tokens and minimum reservation", async () => {
   await w.saveProfile({ tokenLimit: 10000 }, "standard");
   const previous = await w.reserveWorkspaceTokens(key.id, 10000, "openai/test");

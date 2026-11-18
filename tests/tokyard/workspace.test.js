@@ -116,7 +116,7 @@ test("schema 3 upgrade preserves keys, monthly counters and today's settled and 
   w = await import("@/lib/workspace.js");
   db = await w.ensureWorkspace();
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 80, reserved: 50, daily: { limit: null, consumed: 80, reserved: 50 } });
-  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("4");
+  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("5");
   expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
   await w.saveProfile({ dailyTokenLimit: 130 }, "standard");
   await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Daily");

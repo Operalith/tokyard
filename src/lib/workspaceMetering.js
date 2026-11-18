@@ -44,12 +44,16 @@ export async function meterWorkspaceChat(request, dispatch) {
     const inputBound = Buffer.byteLength(raw) + INPUT_OVERHEAD_TOKENS;
     const budget = await getUserBudget(user.id);
     const requestedOutput = body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens ?? user.maxOutputTokens;
-    const remaining = Math.min(budget.remaining, budget.daily.remaining ?? Infinity);
+    const balances = [
+      ["monthly", user.tokenLimitOverride === null ? "profile" : "personal override", budget],
+      ["daily", user.dailyTokenLimitOverride === null ? "profile" : "personal override", budget.daily],
+      ...(budget.shared ? [["monthly", "shared profile pool", budget.shared], ["daily", "shared profile pool", budget.shared.daily]] : []),
+    ].filter(([, , balance]) => balance.remaining !== null);
+    const [period, source, limiting] = balances.reduce((smallest, entry) => entry[2].remaining <= smallest[2].remaining ? entry : smallest);
+    const remaining = limiting.remaining;
     const output = Math.min(requestedOutput, user.maxOutputTokens, remaining - inputBound);
     if (output < 1) {
-      const daily = budget.daily.remaining !== null && budget.daily.remaining <= budget.remaining;
-      const period = daily ? "daily" : "monthly", balance = daily ? budget.daily : budget;
-      const source = (daily ? user.dailyTokenLimitOverride : user.tokenLimitOverride) === null ? "profile" : "personal override";
+      const balance = limiting;
       throw new WorkspaceError(`Insufficient ${period} token allowance for this request: ${balance.remaining} remaining (${balance.limit} ${source} limit, ${balance.consumed} used, ${balance.reserved} held); at least ${inputBound + 1} required. Reduce request history or increase the ${period} ${source} limit.`, 429);
     }
     const path = new URL(request.url).pathname;
