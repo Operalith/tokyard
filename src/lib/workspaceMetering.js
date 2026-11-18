@@ -8,10 +8,6 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const INPUT_OVERHEAD_TOKENS = 2048;
 const UNSUPPORTED_CONTENT = new Set(["image_url", "input_image", "image", "input_audio", "audio", "video", "document", "file", "input_file"]);
 
-// Conservative bound, not a tokenizer: real text (incl. 3-byte CJK) averages >= 2 UTF-8 bytes per token.
-// Settlement always uses provider usage, so this only sizes the hold.
-export const inputTokenBound = (raw) => Math.ceil(Buffer.byteLength(raw) / 2) + INPUT_OVERHEAD_TOKENS;
-
 function hasUnsupportedContent(value, depth = 0) {
   if (!value || typeof value !== "object") return false;
   if (depth > 32) throw new WorkspaceError("Request nesting exceeds 32 levels");
@@ -44,7 +40,8 @@ export async function meterWorkspaceChat(request, dispatch) {
     for (const field of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) {
       if (body[field] !== undefined && (!Number.isSafeInteger(body[field]) || body[field] < 1)) throw new WorkspaceError(`${field} must be a positive integer`);
     }
-    const inputBound = inputTokenBound(raw);
+    // Conservative UTF-8 byte bound, not a claim about provider tokenization.
+    const inputBound = Buffer.byteLength(raw) + INPUT_OVERHEAD_TOKENS;
     const budget = await getUserBudget(user.id);
     const requestedOutput = body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens ?? user.maxOutputTokens;
     const remaining = Math.min(budget.remaining, budget.daily.remaining ?? Infinity);
