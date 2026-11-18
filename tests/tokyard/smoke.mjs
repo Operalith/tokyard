@@ -296,8 +296,10 @@ try {
       await heading("Welcome, Smoke.");
       assert.equal(await page.getByRole("meter", { name: "Shared daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "6000");
       const memberPool = await (await page.request.get(`${base}/api/workspace`)).json();
-      assert.equal(memberPool.budget.shared.consumed, 120);
-      assert.equal(memberPool.budget.available, 4910);
+      // 5 settled mock requests × 30 tokens: the member's 4 (incl. the /v1/messages cap check) + the teammate's 1.
+      assert.equal(memberPool.budget.shared.consumed, 150);
+      // Tighter of personal daily (5000 − member's 120) and shared daily (6000 − 150).
+      assert.equal(memberPool.budget.available, 4880);
       assert.equal(memberPool.users, undefined, "Members must see aggregate pool usage without other members' records");
       assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "5000");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Daily allowance must fit mobile width");
