@@ -28,6 +28,7 @@ vi.mock("@/lib/auth/oidc", () => ({
 }));
 
 vi.mock("@/lib/auth/dashboardSession", () => ({
+  DASHBOARD_AUTH_COOKIE: "tokyard_auth_token",
   getDashboardAuthSession: mocks.getDashboardAuthSession,
 }));
 
@@ -48,6 +49,7 @@ describe("GET /api/auth/status", () => {
 
     expect(response.body.authenticated).toBe(true);
     expect(mocks.getDashboardAuthSession).toHaveBeenCalledWith("session-token");
+    expect((await mocks.cookies()).get).toHaveBeenCalledWith("tokyard_auth_token");
   });
 
   it("reports unauthenticated when the auth cookie is invalid", async () => {

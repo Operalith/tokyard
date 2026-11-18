@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { sessionFromRequest, readSessionIdentity, attachSessionCookie } from "@/lib/mimoLoginSession";
+import { SESSION_COOKIE, sessionFromRequest, readSessionIdentity, attachSessionCookie } from "@/lib/mimoLoginSession";
 
 /**
  * GET /api/oauth/xiaomi-mimo/login/status?state=...
@@ -40,6 +40,6 @@ export async function GET(request) {
   const payload = { status: "done", region: sess.region, ...id };
   // One-shot: don't let the identity linger past the client reading it.
   const res = NextResponse.json(payload);
-  res.cookies.set("9r_mimo_login", "", { path: "/", httpOnly: true, maxAge: 0 });
+  res.cookies.set(SESSION_COOKIE, "", { path: "/", httpOnly: true, maxAge: 0 });
   return res;
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSettings, validateApiKey } from "@/lib/localDb";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
-import { verifyDashboardAuthToken, getDashboardAuthSession } from "@/lib/auth/dashboardSession";
+import { DASHBOARD_AUTH_COOKIE, verifyDashboardAuthToken, getDashboardAuthSession } from "@/lib/auth/dashboardSession";
 import { hasTrustedPeerHeaders } from "@/lib/auth/trustedPeer";
 import { getApiKeyByKey } from "@/lib/db/repos/apiKeysRepo.js";
 
@@ -180,7 +180,7 @@ async function canAccessLocalOnlyRoute(request) {
 }
 
 async function hasValidToken(request) {
-  const token = request.cookies.get("auth_token")?.value;
+  const token = request.cookies.get(DASHBOARD_AUTH_COOKIE)?.value;
   return await verifyDashboardAuthToken(token);
 }
 
@@ -194,7 +194,7 @@ async function loadSettings() {
 }
 
 async function isAuthenticated(request) {
-  const session = await getDashboardAuthSession(request.cookies.get("auth_token")?.value);
+  const session = await getDashboardAuthSession(request.cookies.get(DASHBOARD_AUTH_COOKIE)?.value);
   return session?.role === "admin";
 }
 
@@ -216,7 +216,7 @@ export const __test__ = {
 
 export async function proxy(request) {
   const { pathname } = request.nextUrl;
-  const session = await getDashboardAuthSession(request.cookies.get("auth_token")?.value);
+  const session = await getDashboardAuthSession(request.cookies.get(DASHBOARD_AUTH_COOKIE)?.value);
   if (session?.role === "member" && !isPublicLlmApi(pathname)) {
     if (pathname.startsWith("/api/")) {
       const allowed = pathname === "/api/auth/status" || pathname === "/api/auth/logout" || pathname === "/api/workspace" || pathname === "/api/workspace/keys" || pathname.startsWith("/api/workspace/keys/");
@@ -283,7 +283,7 @@ export async function proxy(request) {
     // TokYard always authenticates workspace pages, including legacy installations.
 
     // Verify JWT token
-    const token = request.cookies.get("auth_token")?.value;
+    const token = request.cookies.get(DASHBOARD_AUTH_COOKIE)?.value;
     if (token) {
       if (await verifyDashboardAuthToken(token)) {
         return NextResponse.next();

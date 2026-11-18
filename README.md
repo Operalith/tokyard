@@ -81,6 +81,8 @@ Use a model you connected and allowed. The example does not provision an OpenAI 
 
 Allowances count **input + output tokens**, including cache input. Each user has a monthly allowance and an optional daily cap, shared across every one of their keys and provider accounts. Every request must fit both limits. The same usage counts toward both periods; tokens are not charged twice. Profile changes affect existing users unless an individual allowance override is set. In **Edit access**, leave a personal limit empty to inherit the profile. Lowering a limit preserves earlier consumption and outstanding holds.
 
+Increasing a profile allowance applies to existing keys immediately, without restarting or signing in again. Changing a monthly limit from 10,000 to 25,000 after consuming 10,000 leaves 15,000 available, minus any held tokens; it does not add 25,000 credits. The dashboard labels profile inheritance and personal overrides. Insufficient-allowance errors include the effective limit, used and held tokens, remaining balance, and minimum reservation needed for that request. A large conversation can still exceed the new balance: shorten its history or raise the effective limit.
+
 Daily totals come from the existing request ledger, so enabling a daily cap includes usage and holds already recorded today. Existing profiles start without a daily cap. Unused daily allowance does not carry forward.
 
 Before dispatch, TokYard reserves a conservative text-input allowance (UTF-8 request bytes plus 2,048 tokens of overhead) and the clamped output allowance. The reservation is committed in a SQLite transaction before contacting a provider. Requests that do not fit receive **429**. Small remaining balances may not admit another request even when the final usage would be smaller.
@@ -90,6 +92,10 @@ Reliable provider usage settles the reservation to its reported total. A request
 A late response settles against its original day and month. Daily limits reset at 00:00 UTC; monthly limits reset at 00:00 UTC on the first day of the month. Holds from an earlier day still affect their original monthly allowance. The dashboard shows the latest 100 requests; older ledger rows remain in the database and count toward daily totals.
 
 This is admission control with conservative reservations, **not an external provider spending guarantee**. A provider may tokenize differently, inject context, ignore output caps or report more tokens than reserved. Reported totals are recorded even if that exceeds the current allowance; new requests then stop. Provider invoices and rate limits remain authoritative.
+
+### Running alongside 9router
+
+TokYard uses separate `tokyard_` dashboard, OIDC and MiMo session cookies, so signing in or out does not overwrite 9router cookies on the same host. After upgrading from a version using `auth_token`, sign in to TokYard once; existing API keys and allowance records remain valid. In-progress OIDC/MiMo sign-ins must be started again. Use separate data directories for the two applications.
 
 ### Alpha boundaries
 

@@ -59,6 +59,7 @@ try {
   const json = (body, cookie, method = "POST") => ({ method, headers: { "Content-Type": "application/json", ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
   const ownerLogin = await call("/api/auth/login", json({ password }));
   const owner = ownerLogin.headers.get("set-cookie").split(";")[0];
+  assert.match(owner, /^tokyard_auth_token=/);
   const ownerGet = { headers: { cookie: owner } };
   const settings = await (await call("/api/settings", ownerGet)).json();
   assert.equal(settings.databasePath, path.join(dataDir, "db/data.sqlite"));
@@ -94,6 +95,14 @@ try {
   assert.match((await dailyDenied.json()).error.message, /daily/i);
   assert.equal(dispatched, 2, "Daily exhaustion must block before the provider");
   await call(`/api/workspace/users/${user.id}`, json({ dailyTokenLimit: null }, owner, "PATCH"));
+  await call("/api/workspace/profiles/standard", json({ tokenLimit: 60 }, owner, "PATCH"));
+  await call("/v1/chat/completions", inference(key2.key), 429);
+  await call("/api/workspace/profiles/standard", json({ tokenLimit: 25000 }, owner, "PATCH"));
+  await call("/v1/chat/completions", inference(key2.key));
+  assert.equal(dispatched, 3, "Raising the profile must unblock the existing key without a restart");
+  const increased = (await (await call("/api/workspace", ownerGet)).json()).users[0].budget;
+  assert.equal(increased.limit, 25000);
+  assert.equal(increased.consumed, 90);
   const memberLogin = await call("/api/auth/login", json({ email: user.email, password }));
   const member = memberLogin.headers.get("set-cookie").split(";")[0];
   await call(`/api/workspace/users/${user.id}`, json({ dailyTokenLimit: 999999 }, member, "PATCH"), 403);
@@ -107,7 +116,8 @@ try {
     const browser = await chromium.launch({ headless: true, ...(process.env.TOKYARD_BROWSER_EXECUTABLE ? { executablePath: process.env.TOKYARD_BROWSER_EXECUTABLE } : {}), args: ["--no-sandbox"] });
     try {
       const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
-      await page.context().addCookies([{ name: "auth_token", value: owner.slice("auth_token=".length), url: base }]);
+      fs.mkdirSync(path.join(root, ".tokyard/preview"), { recursive: true });
+      await page.context().addCookies([{ name: "tokyard_auth_token", value: owner.slice("tokyard_auth_token=".length), url: base }, { name: "auth_token", value: "9router-session", url: base }, { name: "oidc_state", value: "9router-state", url: base }, { name: "9r_mimo_login", value: "9router-mimo-session", url: base }]);
       const nav = page.locator(".yard-sidebar nav");
       const heading = text => page.getByRole("heading", { name: text === "Token Saver" ? /Token Saver/ : text, exact: true }).waitFor();
       const visit = async (name, title) => {
@@ -139,11 +149,16 @@ try {
       await page.getByRole("dialog").waitFor({ state: "hidden" });
       await page.reload(); await heading("Shared access. Clear limits.");
       assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "4000");
+      await page.getByText("Daily personal override; profile changes do not apply", { exact: true }).waitFor();
+      await page.screenshot({ path: path.join(root, ".tokyard/preview/session-quota-desktop.png"), fullPage: true });
       await page.getByRole("button", { name: "Edit access", exact: true }).click();
       await page.getByLabel("Personal daily allowance", { exact: false }).fill("");
       await page.getByRole("button", { name: "Save changes", exact: true }).click();
       await page.getByRole("dialog").waitFor({ state: "hidden" });
       assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "5000");
+      await page.getByText("Daily limit inherited from profile", { exact: true }).waitFor();
+      await page.context().addCookies([{ name: "auth_token", value: "new-9router-session", url: base }]);
+      assert.equal((await (await page.request.get(`${base}/api/auth/status`)).json()).authenticated, true);
       await nav.getByRole("link", { name: "Settings", exact: true }).click();
       await page.getByText(settings.databasePath, { exact: true }).waitFor();
       assert.ok(!(await page.locator("main").innerText()).includes("9router"));
@@ -180,17 +195,23 @@ try {
       await page.getByRole("button", { name: "Toggle navigation", exact: true }).click();
       await visit("Profiles", "A policy for every team.");
       assert.equal(await page.getByRole("button", { name: "Toggle navigation", exact: true }).getAttribute("aria-expanded"), "false");
-      await page.context().clearCookies();
-      await page.context().addCookies([{ name: "auth_token", value: member.slice("auth_token=".length), url: base }]);
+      await page.context().addCookies([{ name: "tokyard_auth_token", value: member.slice("tokyard_auth_token=".length), url: base }]);
       await page.goto(`${base}/dashboard`);
       await heading("Welcome, Smoke.");
       assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "5000");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Daily allowance must fit mobile width");
+      await page.screenshot({ path: path.join(root, ".tokyard/preview/session-quota-mobile.png"), fullPage: true });
       assert.equal(await nav.getByRole("link", { name: "Token Saver", exact: true }).count(), 0);
       await page.goto(`${base}/dashboard/support`);
       await heading("Support TokYard with Bitcoin");
       assert.equal(await page.locator(".yard-donation-address").innerText(), bitcoinAddress);
-      console.log("Browser checks passed: daily profile and personal limits, inheritance, navigation, Token Saver, tools, Bitcoin recipient/QR/clipboard/wallet link, mobile and member access.");
+      assert.equal((await page.request.post(`${base}/api/auth/logout`)).status(), 200);
+      const remainingCookies = await page.context().cookies(base);
+      assert.equal(remainingCookies.find(c => c.name === "auth_token")?.value, "new-9router-session");
+      assert.equal(remainingCookies.find(c => c.name === "oidc_state")?.value, "9router-state");
+      assert.equal(remainingCookies.find(c => c.name === "9r_mimo_login")?.value, "9router-mimo-session");
+      assert.equal(remainingCookies.some(c => c.name === "tokyard_auth_token"), false);
+      console.log("Browser checks passed: independent 9router/TokYard cookies and logout, daily profile and personal limits, inheritance, navigation, Token Saver, tools, Bitcoin recipient/QR/clipboard/wallet link, mobile and member access.");
     } finally { await browser.close(); }
   }
   await call("/api/providers", { headers: { cookie: member } }, 403);
@@ -208,8 +229,8 @@ try {
   await call(`/api/workspace/users/${user.id}`, json({ isActive: false }, owner, "PATCH"));
   await call("/v1/chat/completions", inference(key2.key), 401);
   await call("/api/workspace", { headers: { cookie: member } }, 401);
-  assert.equal(dispatched, 3);
-  console.log("TokYard smoke passed: production login, pooled provider, JSON + SSE usage, shared quota, rejection before dispatch, role/ownership/CSRF gates, held reconciliation, revoke and pause.");
+  assert.equal(dispatched, 4);
+  console.log("TokYard smoke passed: production login, pooled provider, JSON + SSE usage, shared quota, profile increase after exhaustion without restart, rejection before dispatch, role/ownership/CSRF gates, held reconciliation, revoke and pause.");
 } catch (error) {
   console.error(error.message);
   console.error(logs);
