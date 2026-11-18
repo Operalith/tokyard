@@ -1,12 +1,12 @@
 // Per-API-key access control: a DB written by the previous schema (apiKeys
 // without the access columns, schemaVersion 1) upgrades in place; every existing
-// key stays unrestricted. Backup export/import carries access, and older backups restore
-// as unrestricted.
+// key stays unrestricted. Partial JSON backups stay disabled to protect workspace usage.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { SCHEMA_VERSION } from "@/lib/db/schema.js";
 
 let tempDir;
 const originalDataDir = process.env.DATA_DIR;
@@ -63,7 +63,7 @@ describe("apiKeys access columns: upgrade from the previous schema", () => {
 
     // The schema bump took the pre-change safety backup.
     const backups = fs.readdirSync(path.join(tempDir, "db", "backups"));
-    expect(backups.some((d) => d.startsWith("schema-1-to-2"))).toBe(true);
+    expect(backups.some((d) => d.startsWith(`schema-1-to-${SCHEMA_VERSION}`))).toBe(true);
   });
 
   it("persists access through update, new keys default to unrestricted", async () => {
@@ -81,23 +81,13 @@ describe("apiKeys access columns: upgrade from the previous schema", () => {
     expect((await db.getApiKeyById(created.id)).access).toEqual({ restricted: false, allow: [] });
   });
 
-  it("export/import round-trips access; a backup without access restores unrestricted; malformed access is refused", async () => {
+  it("refuses partial JSON export/import without changing migrated keys", async () => {
     writeLegacyDb(tempDir);
     const { db } = await boot();
     await db.updateApiKey("k1", { access: { restricted: true, allow: ["Main"] } });
-    const dump = await db.exportDb();
-    expect(dump.apiKeys.find((k) => k.id === "k1").access).toEqual({ restricted: true, allow: ["Main"] });
-
-    await db.importDb(dump);
-    expect((await db.getApiKeyById("k1")).access).toEqual({ restricted: true, allow: ["Main"] });
-
-    const legacy = { ...dump, apiKeys: dump.apiKeys.map(({ access, ...rest }) => rest) };
-    await db.importDb(legacy);
-    expect((await db.getApiKeyById("k1")).access).toEqual({ restricted: false, allow: [] });
-
-    const bad = { ...dump, apiKeys: [{ ...dump.apiKeys[0], access: { restricted: "yes", allow: [] } }] };
-    await expect(db.importDb(bad)).rejects.toThrow(/access/);
-    // The failed import rolled back: the previous rows are still there.
+    await expect(db.exportDb()).rejects.toThrow(/export is disabled/);
+    await expect(db.importDb({ apiKeys: [] })).rejects.toThrow(/import is disabled/);
     expect((await db.getApiKeys()).length).toBe(2);
+    expect((await db.getApiKeyById("k1")).access).toEqual({ restricted: true, allow: ["Main"] });
   });
 });

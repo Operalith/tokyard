@@ -17,7 +17,7 @@
     "build:bun": "bun --bun next build --webpack",
     "start:bun": "bun ./.next/standalone/custom-server.js",
     "test": "vitest run --config tests/vitest.config.js tests/tokyard",
-    "test:upstream": "vitest run --config tests/vitest.config.js tests/unit/key-access.test.js tests/unit/usage-api-key-attribution.test.js tests/unit/db-migration-chain.test.js tests/unit/key-access-handlers.test.js tests/unit/extract-usage-cache-shapes.test.js tests/unit/responses-abort-terminal.test.js tests/unit/auth-status.test.js tests/unit/cli-connect.test.js tests/unit/xiaomi-mimo-login-session-security.test.js",
+    "test:upstream": "vitest run --config tests/vitest.config.js tests/unit/key-access.test.js tests/unit/key-access-migration.test.js tests/unit/usage-api-key-attribution.test.js tests/unit/db-migration-chain.test.js tests/unit/key-access-handlers.test.js tests/unit/extract-usage-cache-shapes.test.js tests/unit/responses-abort-terminal.test.js tests/unit/auth-status.test.js tests/unit/cli-connect.test.js tests/unit/xiaomi-mimo-login-session-security.test.js",
     "test:smoke": "node tests/tokyard/smoke.mjs"
   },
   "dependencies": {
