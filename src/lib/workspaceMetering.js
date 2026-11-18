@@ -8,6 +8,10 @@ const MAX_BODY_BYTES = 1024 * 1024;
 const INPUT_OVERHEAD_TOKENS = 2048;
 const UNSUPPORTED_CONTENT = new Set(["image_url", "input_image", "image", "input_audio", "audio", "video", "document", "file", "input_file"]);
 
+// Conservative bound, not a tokenizer: real text (incl. 3-byte CJK) averages >= 2 UTF-8 bytes per token.
+// Settlement always uses provider usage, so this only sizes the hold.
+export const inputTokenBound = (raw) => Math.ceil(Buffer.byteLength(raw) / 2) + INPUT_OVERHEAD_TOKENS;
+
 function hasUnsupportedContent(value, depth = 0) {
   if (!value || typeof value !== "object") return false;
   if (depth > 32) throw new WorkspaceError("Request nesting exceeds 32 levels");
@@ -40,8 +44,7 @@ export async function meterWorkspaceChat(request, dispatch) {
     for (const field of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) {
       if (body[field] !== undefined && (!Number.isSafeInteger(body[field]) || body[field] < 1)) throw new WorkspaceError(`${field} must be a positive integer`);
     }
-    // Conservative UTF-8 byte bound, not a claim about provider tokenization.
-    const inputBound = Buffer.byteLength(raw) + INPUT_OVERHEAD_TOKENS;
+    const inputBound = inputTokenBound(raw);
     const budget = await getUserBudget(user.id);
     const requestedOutput = body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens ?? user.maxOutputTokens;
     const remaining = Math.min(budget.remaining, budget.daily.remaining ?? Infinity);
@@ -59,10 +62,16 @@ export async function meterWorkspaceChat(request, dispatch) {
     if (body.stream === true && path.endsWith("/chat/completions")) body.stream_options = { ...body.stream_options, include_usage: true };
     reservation = await reserveWorkspaceTokens(key.id, inputBound + output, body.model);
     context = {
-      keyId: key.id, dispatches: 0, usage: null,
+      keyId: key.id, dispatches: 0, usage: null, partialInput: null, outputCap: output,
       onDispatch() { this.dispatches += 1; },
-      onUsage(usage) {
+      onUsage(usage, final = true) {
         if (usage?.estimated) return;
+        if (!final) {
+          // Mid-stream report (Claude message_start, Gemini chunks): exact input, output still unknown.
+          const input = canonicalizeUsage(usage)?.prompt_tokens;
+          if (Number.isSafeInteger(input) && input > 0) this.partialInput = input;
+          return;
+        }
         if (!usage || ![usage.prompt_tokens ?? usage.input_tokens, usage.completion_tokens ?? usage.output_tokens].every(n => Number.isSafeInteger(n) && n >= 0)) return;
         const normalized = canonicalizeUsage(usage);
         if (!normalized) return;
@@ -78,6 +87,8 @@ export async function meterWorkspaceChat(request, dispatch) {
     const finish = (reason) => finished ||= (async () => {
       if (context.usage !== null && context.dispatches <= 1) await settleWorkspaceTokens(reservation.id, context.usage);
       else if (context.dispatches === 0) await settleWorkspaceTokens(reservation.id, 0, "local");
+      // Provider-reported input plus the output cap enforced upstream is an upper bound.
+      else if (context.partialInput !== null && context.dispatches === 1) await settleWorkspaceTokens(reservation.id, context.partialInput + output, "bound", reason || "Stream ended before final usage; charged reported input plus output cap");
       else await markWorkspaceUncertain(reservation.id, reason || "No reliable final usage; reservation remains held for reconciliation");
     })();
     const response = await dispatch(metered);

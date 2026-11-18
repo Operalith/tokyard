@@ -32,3 +32,32 @@ export function adjustMaxTokens(body, ceiling = DEFAULT_MAX_TOKENS) {
   return maxTokens;
 }
 
+/**
+ * Hard output ceiling for metered requests, applied to the final upstream body:
+ * translators raise max_tokens for tools/thinking, so a pre-translation cap does not hold.
+ * Only lowers fields already present; a provider that dropped its cap stays uncapped.
+ */
+export function capOutputTokens(body, cap) {
+  if (!body || typeof body !== "object" || !Number.isSafeInteger(cap) || cap < 1) return body;
+  for (const target of [body, body.request]) {
+    if (!target || typeof target !== "object") continue;
+    for (const field of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) {
+      if (typeof target[field] === "number" && target[field] > cap) target[field] = cap;
+    }
+    const config = target.generationConfig;
+    if (config && typeof config === "object") {
+      if (typeof config.maxOutputTokens === "number" && config.maxOutputTokens > cap) config.maxOutputTokens = cap;
+      const budget = config.thinkingConfig?.thinkingBudget;
+      if (typeof budget === "number" && (budget < 0 || budget > cap)) config.thinkingConfig.thinkingBudget = cap;
+    }
+  }
+  // Claude requires budget_tokens (min 1024) < max_tokens; drop thinking when the cap leaves no room.
+  const thinking = body.thinking;
+  if (typeof thinking?.budget_tokens === "number" && typeof body.max_tokens === "number" && thinking.budget_tokens >= body.max_tokens) {
+    const budget = Math.max(1024, body.max_tokens - 1024);
+    if (budget < body.max_tokens) thinking.budget_tokens = budget;
+    else delete body.thinking;
+  }
+  return body;
+}
+

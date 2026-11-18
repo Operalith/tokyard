@@ -73,6 +73,8 @@ export function createSSEStream(options = {}) {
     if (parsed.choices?.some(c => c.finish_reason) || parsed.delta?.stop_reason ||
         parsed.done || parsed.candidates?.some(c => c.finishReason) || parsed.response?.candidates?.some(c => c.finishReason) ||
         (parsed.response?.usage && isOpenAIResponsesTerminalEvent(null, parsed))) providerFinished = true;
+    // Partial report lets a cut-off stream settle on real input instead of holding the whole reservation.
+    else if (providerUsage && !providerFinished) onUsage(providerUsage, false);
   };
 
 
