@@ -773,6 +773,13 @@ button:disabled,
 .yard-field small { color:var(--color-text-muted); font-size:10px; font-weight:400; line-height:1.7; }
 .yard-form-pair { display:grid; grid-template-columns:1fr 1fr; gap:15px; }
 .yard-form-actions { display:flex; justify-content:flex-end; gap:10px; padding-top:7px; }
+.yard-quota-policy { min-width:0; border:1px solid var(--color-border); border-radius:7px; padding:14px; display:flex; flex-direction:column; gap:12px; }
+.yard-quota-policy legend { font-size:11px; font-weight:600; padding-inline:5px; }
+.yard-shared-budget { border:1px solid var(--color-border); border-radius:7px; padding:14px; margin:16px 20px; min-width:0; }
+.yard-shared-budget h3 { font-size:12px; font-weight:600; }
+.yard-shared-budget>.yard-help { margin-top:7px; }
+.yard-shared-budget .yard-budget { padding:14px 0 0; }
+.yard-profile>.yard-shared-budget { margin:16px 0; }
 .yard-model-picker { min-width:0; border:0; padding:0; }
 .yard-model-picker legend { font-size:11px; font-weight:550; margin-bottom:10px; }
 .yard-model-picker small { display:block; color:var(--color-text-muted); font-size:10px; line-height:1.7; margin-top:6px; }

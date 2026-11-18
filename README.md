@@ -85,6 +85,16 @@ Increasing a profile allowance applies to existing keys immediately, without res
 
 Daily totals come from the existing request ledger, so enabling a daily cap includes usage and holds already recorded today. Existing profiles start without a daily cap. Unused daily allowance does not carry forward.
 
+### Fixed and shared profile budgets
+
+Profiles start in **Fixed** mode: every person has a separate allowance. In **Edit profile → Quota sharing**, choose **Shared** to let everyone on that profile draw from one pool. Set a **Shared monthly token allowance**, a **Shared daily token allowance**, or both. Empty means no pool cap for that period; at least one pool limit is required. A limit of `0` stops new pool requests. Different profiles have separate pools.
+
+The existing monthly/daily allowances are still **maximums per person**, including all pool use. Personal overrides still apply and cannot bypass the pool. For example, a 20,000-token pool and a 20,000-token maximum per person allow one member to use 2,000 and another to use 18,000. A member with a 10,000 personal maximum still stops at 10,000; raise that maximum if they may borrow more of the pool. There is no fixed slice held aside for each person: access is first come, first served. Use Fixed mode when individual shares must stay separate. Unused daily/monthly pool tokens do not carry forward.
+
+Every reservation must fit personal and shared daily/monthly balances in the same SQLite transaction. Held tokens reduce pool availability until reliable settlement or owner reconciliation. The profile card and member access panel show pool usage, held tokens and remaining balances; the member panel also shows the amount available after applying all limits. Members see aggregate pool totals, without other members' private records.
+
+Enabling sharing includes requests already made on that profile during the current period, including requests made in Fixed mode. Changing limits or switching modes never clears usage. Each request keeps its original profile, day and month: moving a person to another profile or receiving late usage does not move earlier charges or holds into the new pool. During the first upgrade, old requests without a profile snapshot are assigned once to their user's profile at upgrade time; older profile membership cannot be reconstructed from those rows. The migration preserves keys, counters and requests and takes the existing pre-schema safety backup.
+
 Before dispatch, TokYard reserves a conservative text-input allowance (UTF-8 request bytes plus 2,048 tokens of overhead) and the clamped output allowance. The reservation is committed in a SQLite transaction before contacting a provider. Requests that do not fit receive **429**. Small remaining balances may not admit another request even when the final usage would be smaller.
 
 Reliable provider usage settles the reservation to its reported total. A request rejected locally before dispatch settles to zero. Missing usage, interruption, restart or more than one upstream attempt keeps the reservation **held for review**. The owner can reconcile held requests using provider logs and a recorded reason. Restart never automatically refunds unknown provider usage.
