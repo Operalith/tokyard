@@ -49,6 +49,11 @@ describe("connect helpers", () => {
     expect(extractAuthCookie(new Headers())).toBeNull();
   });
 
+  it("extractAuthCookie supports TokYard's independent session cookie", () => {
+    const h = new Headers({ "set-cookie": "tokyard_auth_token=tokyard-session; Path=/; HttpOnly" });
+    expect(extractAuthCookie(h)).toBe("tokyard_auth_token=tokyard-session");
+  });
+
   it("maskKey never reveals the middle of the key", () => {
     expect(maskKey("sk-1234567890abcdef")).toBe("sk-123…cdef");
     expect(maskKey("short")).toBe("****");
@@ -194,10 +199,12 @@ describe("connect run()", () => {
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "9r-connect-run-"));
     vi.spyOn(os, "homedir").mockReturnValue(home);
+    vi.stubEnv("XDG_CONFIG_HOME", "");
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     fs.rmSync(home, { recursive: true, force: true });
   });
 

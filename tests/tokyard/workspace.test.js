@@ -154,6 +154,35 @@ test("pause and revoke immediately reject inference and invalidate sessions", as
   await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Invalid API key");
 });
 
+test("dashboard login, authorization and logout leave 9router cookies untouched", async () => {
+  const { createDashboardAuthToken, setDashboardAuthCookie, clearDashboardAuthCookie } = await import("@/lib/auth/dashboardSession.js");
+  const { requireWorkspaceSession } = await import("@/lib/workspaceHttp.js");
+  const { proxy } = await import("@/dashboardGuard.js");
+  const values = new Map([["auth_token", "9router-session"], ["oidc_state", "9router-state"]]);
+  const store = {
+    get: name => values.has(name) ? { value: values.get(name) } : undefined,
+    set: (name, value) => values.set(name, value),
+    delete: name => values.delete(name),
+  };
+  const request = new Request("http://localhost/api/workspace");
+  await setDashboardAuthCookie(store, request);
+  expect(values.get("auth_token")).toBe("9router-session");
+  expect(values.get("tokyard_auth_token")).toBeTruthy();
+  const legacy = await createDashboardAuthToken();
+  await expect(requireWorkspaceSession(new Request(request.url, { headers: { cookie: `auth_token=${legacy}` } }))).rejects.toMatchObject({ status: 401 });
+  const own = values.get("tokyard_auth_token");
+  expect((await requireWorkspaceSession(new Request(request.url, { headers: { cookie: `auth_token=other; tokyard_auth_token=${own}` } }))).role).toBe("admin");
+  const dashboard = { url: "http://localhost/dashboard", nextUrl: new URL("http://localhost/dashboard"), method: "GET", headers: new Headers(), cookies: store };
+  expect((await proxy(dashboard)).status).toBe(200);
+  values.set("auth_token", "another-9router-login");
+  expect((await proxy(dashboard)).status).toBe(200);
+  clearDashboardAuthCookie(store);
+  expect(values.has("tokyard_auth_token")).toBe(false);
+  expect(values.get("auth_token")).toBe("another-9router-login");
+  expect(values.get("oidc_state")).toBe("9router-state");
+  expect((await proxy(dashboard)).status).toBe(307);
+});
+
 test("profile edits apply to existing keys and individual overrides remain explicit", async () => {
   const { getApiKeyByKey } = await import("@/lib/db/repos/apiKeysRepo.js");
   await w.saveProfile({ tokenLimit: 500, allowedModels: ["openai/test"] }, "standard");
@@ -190,10 +219,10 @@ test("HTTP boundary enforces ownership, role and same-origin mutations", async (
   const { createDashboardAuthToken } = await import("@/lib/auth/dashboardSession.js");
   const { requireWorkspaceSession } = await import("@/lib/workspaceHttp.js");
   const token = await createDashboardAuthToken({ role: "member", userId: user.id, authVersion: user.authVersion });
-  const request = (route, options = {}) => new Request(`http://localhost${route}`, { ...options, headers: { cookie: `auth_token=${token}`, ...options.headers } });
+  const request = (route, options = {}) => new Request(`http://localhost${route}`, { ...options, headers: { cookie: `tokyard_auth_token=${token}`, ...options.headers } });
   await expect(requireWorkspaceSession(request("/api/workspace"), true)).rejects.toMatchObject({ status: 403 });
   await expect(requireWorkspaceSession(request("/api/workspace/keys", { method: "POST", headers: { origin: "https://evil.example" } }))).rejects.toMatchObject({ status: 403 });
-  const rewritten = new Request("http://localhost:20120/api/workspace/keys", { method: "POST", headers: { cookie: `auth_token=${token}`, host: "127.0.0.1:20120", origin: "http://127.0.0.1:20120" } });
+  const rewritten = new Request("http://localhost:20120/api/workspace/keys", { method: "POST", headers: { cookie: `tokyard_auth_token=${token}`, host: "127.0.0.1:20120", origin: "http://127.0.0.1:20120" } });
   expect((await requireWorkspaceSession(rewritten)).userId).toBe(user.id);
   const keysApi = await import("@/app/api/workspace/keys/route.js");
   expect((await keysApi.GET(request("/api/workspace/keys?userId=someone-else"))).status).toBe(403);

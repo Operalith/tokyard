@@ -7,6 +7,7 @@ import { DATA_DIR } from "@/lib/dataDir";
 import { getSettings } from "@/lib/localDb";
 
 const SESSION_MAX_AGE_SEC = 24 * 60 * 60;
+export const DASHBOARD_AUTH_COOKIE = "tokyard_auth_token";
 
 function loadJwtSecret() {
   if (process.env.JWT_SECRET) return process.env.JWT_SECRET;
@@ -60,7 +61,7 @@ export async function getDashboardAuthSession(token) {
 
 export async function setDashboardAuthCookie(cookieStore, request, claims = {}) {
   const token = await createDashboardAuthToken(claims);
-  cookieStore.set("auth_token", token, {
+  cookieStore.set(DASHBOARD_AUTH_COOKIE, token, {
     httpOnly: true,
     secure: shouldUseSecureCookie(request),
     sameSite: "lax",
@@ -70,7 +71,7 @@ export async function setDashboardAuthCookie(cookieStore, request, claims = {}) 
 }
 
 export function clearDashboardAuthCookie(cookieStore) {
-  cookieStore.delete("auth_token");
+  cookieStore.delete(DASHBOARD_AUTH_COOKIE);
 }
 
 // Verify the current dashboard password (re-auth for sensitive actions).

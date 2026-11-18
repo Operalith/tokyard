@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import {
+  OIDC_COOKIE_NAMES,
   exchangeOidcCode,
   fetchOidcDiscovery,
   getOidcRuntimeConfig,
@@ -12,9 +13,7 @@ import {
 import { setDashboardAuthCookie } from "@/lib/auth/dashboardSession";
 
 function clearOidcCookies(cookieStore) {
-  cookieStore.delete("oidc_state");
-  cookieStore.delete("oidc_nonce");
-  cookieStore.delete("oidc_code_verifier");
+  for (const name of Object.values(OIDC_COOKIE_NAMES)) cookieStore.delete(name);
 }
 
 export async function GET(request) {
@@ -31,9 +30,9 @@ export async function GET(request) {
   }
 
   const cookieStore = await cookies();
-  const storedState = cookieStore.get("oidc_state")?.value;
-  const storedNonce = cookieStore.get("oidc_nonce")?.value;
-  const codeVerifier = cookieStore.get("oidc_code_verifier")?.value;
+  const storedState = cookieStore.get(OIDC_COOKIE_NAMES.state)?.value;
+  const storedNonce = cookieStore.get(OIDC_COOKIE_NAMES.nonce)?.value;
+  const codeVerifier = cookieStore.get(OIDC_COOKIE_NAMES.verifier)?.value;
 
   if (!storedState || !storedNonce || !codeVerifier || storedState !== state) {
     clearOidcCookies(cookieStore);

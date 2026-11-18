@@ -1,8 +1,8 @@
-import { getDashboardAuthSession } from "./auth/dashboardSession.js";
+import { DASHBOARD_AUTH_COOKIE, getDashboardAuthSession } from "./auth/dashboardSession.js";
 import { WorkspaceError } from "./workspace.js";
 
 export async function requireWorkspaceSession(request, admin = false) {
-  const cookie = request.cookies?.get?.("auth_token")?.value || (request.headers.get("cookie") || "").split(";").map(s => s.trim()).find(s => s.startsWith("auth_token="))?.slice(11);
+  const cookie = request.cookies?.get?.(DASHBOARD_AUTH_COOKIE)?.value || (request.headers.get("cookie") || "").split(";").map(s => s.trim()).find(s => s.startsWith(`${DASHBOARD_AUTH_COOKIE}=`))?.slice(DASHBOARD_AUTH_COOKIE.length + 1);
   const session = await getDashboardAuthSession(cookie);
   if (!session) throw new WorkspaceError("Sign in to continue", 401);
   if (admin && session.role !== "admin") throw new WorkspaceError("Administrator access required", 403);

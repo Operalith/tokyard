@@ -156,8 +156,8 @@ async function request(url, { method = "GET", body, cookie, apiKey } = {}) {
 function extractAuthCookie(headers) {
   const list = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [headers.get("set-cookie") || ""];
   for (const c of list) {
-    const m = /(?:^|,\s*)auth_token=([^;]+)/.exec(c);
-    if (m) return `auth_token=${m[1]}`;
+    const m = /(?:^|,\s*)(tokyard_auth_token|auth_token)=([^;]+)/.exec(c);
+    if (m) return `${m[1]}=${m[2]}`;
   }
   return null;
 }

@@ -61,6 +61,51 @@ test("output fits the smaller daily/monthly balance and daily exhaustion blocks 
   expect(dispatch).not.toHaveBeenCalled();
 });
 
+test.each(["tokenLimit", "dailyTokenLimit"])("increasing profile %s immediately unblocks an exhausted existing key", async field => {
+  await w.saveProfile({ [field]: 10000 }, "standard");
+  const dispatch = vi.fn(async req => {
+    req.tokyardMeter.onDispatch();
+    req.tokyardMeter.onUsage({ input_tokens: 9990, output_tokens: 10 });
+    return Response.json({});
+  });
+  expect((await meter(request(key.key), dispatch)).status).toBe(200);
+  expect((await meter(request(key.key), dispatch)).status).toBe(429);
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  await w.saveProfile({ [field]: 25000 }, "standard");
+  expect((await meter(request(key.key), dispatch)).status).toBe(200);
+  expect(dispatch).toHaveBeenCalledTimes(2);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 20000, reserved: 0 });
+});
+
+test("insufficient balance explains the updated limit, used tokens and minimum reservation", async () => {
+  await w.saveProfile({ tokenLimit: 10000 }, "standard");
+  const previous = await w.reserveWorkspaceTokens(key.id, 10000, "openai/test");
+  await w.settleWorkspaceTokens(previous.id, 10000);
+  await w.saveProfile({ tokenLimit: 25000 }, "standard");
+  const req = request(key.key, { messages: [{ role: "user", content: "x".repeat(14000) }] });
+  const required = Buffer.byteLength(await req.clone().text()) + 2048 + 1;
+  const dispatch = vi.fn();
+  const response = await meter(req, dispatch);
+  expect(response.status).toBe(429);
+  const message = (await response.json()).error.message;
+  for (const detail of ["monthly", "25000", "10000", "15000", String(required), "profile"]) expect(message).toContain(detail);
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(await w.getUserBudget(user.id)).toMatchObject({ limit: 25000, consumed: 10000, reserved: 0, remaining: 15000 });
+});
+
+test.each(["tokenLimit", "dailyTokenLimit"])("a personal %s override stays explicit after increasing its profile", async field => {
+  await w.updateWorkspaceUser(user.id, { [field]: 10000 });
+  await w.saveProfile({ [field]: 25000 }, "standard");
+  const req = request(key.key, { messages: [{ role: "user", content: "x".repeat(10000) }] });
+  const dispatch = vi.fn();
+  const response = await meter(req, dispatch);
+  expect(response.status).toBe(429);
+  expect((await response.json()).error.message).toContain("10000 personal override limit");
+  expect(dispatch).not.toHaveBeenCalled();
+  await w.updateWorkspaceUser(user.id, { [field]: null });
+  expect((await meter(request(key.key), async () => Response.json({}))).status).toBe(200);
+});
+
 test("stream settles at EOF; estimated or missing usage stays held", async () => {
   const response = await meter(request(key.key, { stream: true }), async req => {
     req.tokyardMeter.onDispatch();

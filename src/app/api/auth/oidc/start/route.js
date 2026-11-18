@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import {
+  OIDC_COOKIE_NAMES,
   buildOidcAuthorizationUrl,
   createOidcNonce,
   createOidcState,
@@ -41,9 +42,9 @@ export async function GET(request) {
       path: "/",
       maxAge: 10 * 60,
     };
-    cookieStore.set("oidc_state", state, baseOptions);
-    cookieStore.set("oidc_nonce", nonce, baseOptions);
-    cookieStore.set("oidc_code_verifier", verifier, baseOptions);
+    cookieStore.set(OIDC_COOKIE_NAMES.state, state, baseOptions);
+    cookieStore.set(OIDC_COOKIE_NAMES.nonce, nonce, baseOptions);
+    cookieStore.set(OIDC_COOKIE_NAMES.verifier, verifier, baseOptions);
 
     return NextResponse.redirect(authUrl);
   } catch (error) {

@@ -46,7 +46,12 @@ export async function meterWorkspaceChat(request, dispatch) {
     const requestedOutput = body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens ?? user.maxOutputTokens;
     const remaining = Math.min(budget.remaining, budget.daily.remaining ?? Infinity);
     const output = Math.min(requestedOutput, user.maxOutputTokens, remaining - inputBound);
-    if (output < 1) throw new WorkspaceError(budget.daily.remaining !== null && budget.daily.remaining <= budget.remaining ? "Insufficient daily token allowance for this request" : "Insufficient monthly token allowance for this request", 429);
+    if (output < 1) {
+      const daily = budget.daily.remaining !== null && budget.daily.remaining <= budget.remaining;
+      const period = daily ? "daily" : "monthly", balance = daily ? budget.daily : budget;
+      const source = (daily ? user.dailyTokenLimitOverride : user.tokenLimitOverride) === null ? "profile" : "personal override";
+      throw new WorkspaceError(`Insufficient ${period} token allowance for this request: ${balance.remaining} remaining (${balance.limit} ${source} limit, ${balance.consumed} used, ${balance.reserved} held); at least ${inputBound + 1} required. Reduce request history or increase the ${period} ${source} limit.`, 429);
+    }
     const path = new URL(request.url).pathname;
     const field = path.endsWith("/responses") || path.startsWith("/codex/") ? "max_output_tokens" : body.max_completion_tokens !== undefined ? "max_completion_tokens" : "max_tokens";
     for (const name of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) delete body[name];
