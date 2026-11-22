@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.4 — 2026-11-22
+
+- Remove the fixed 32,768-token profile output ceiling; Fixed and Shared profiles accept larger output caps, subject to the model/provider capacity and available allowance.
+- Stop applying the saved profile output cap in Usage only mode. Preserve explicit client limits and leave omitted limits to the model/provider defaults.
+- Show each person's daily/monthly input, output and total tokens, including cache input, across their keys.
+- Store new request usage splits with an additive database migration. Preserve older totals as unclassified rather than inventing a split.
+
 ## 0.1.0-alpha.3 — 2026-11-22
 
 - Let members change their own password from My workspace after entering the current password and confirming the new one.

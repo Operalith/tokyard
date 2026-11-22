@@ -67,7 +67,7 @@ export async function saveProfile(input, id = null, actor = "owner") {
   const sharedDailyTokenLimit = data.sharedDailyTokenLimit === null ? null : integer(data.sharedDailyTokenLimit, "Shared daily token allowance", 0, 1_000_000_000_000);
   if (!usageOnly && quotaMode === "shared" && sharedTokenLimit === null && sharedDailyTokenLimit === null) fail("Set a shared monthly or daily allowance");
   const maxConcurrent = integer(data.maxConcurrent, "Concurrent requests", 1, 20);
-  const maxOutputTokens = integer(data.maxOutputTokens, "Output token limit", 1, 32768);
+  const maxOutputTokens = integer(data.maxOutputTokens, "Output token limit", 1, 1_000_000_000_000);
   if (!Array.isArray(data.allowedModels) || data.allowedModels.length > 200 || data.allowedModels.some(m => typeof m !== "string" || !m.trim() || m.length > 256)) fail("Allowed models must contain at most 200 model identifiers");
   const allowedModels = [...new Set(data.allowedModels.map(m => m.trim()))];
   if (db.get("SELECT id FROM workspaceProfiles WHERE name = ? AND id != ?", [name, id || ""])) fail("Profile name already exists", 409);
@@ -88,7 +88,7 @@ export async function getWorkspaceUser(id) {
     JOIN workspaceProfiles p ON p.id = u.profileId WHERE u.id = ?`, [id]);
   if (!row) return null;
   const { passwordHash, ...user } = row;
-  return { ...user, isActive: !!row.isActive, usageOnly: !!row.usageOnly, tokenLimit: row.usageOnly ? null : row.tokenLimit ?? row.profileTokenLimit, tokenLimitOverride: row.tokenLimit, dailyTokenLimit: row.usageOnly ? null : row.dailyTokenLimit ?? row.profileDailyTokenLimit, dailyTokenLimitOverride: row.dailyTokenLimit, allowedModels: JSON.parse(row.allowedModels) };
+  return { ...user, isActive: !!row.isActive, usageOnly: !!row.usageOnly, tokenLimit: row.usageOnly ? null : row.tokenLimit ?? row.profileTokenLimit, tokenLimitOverride: row.tokenLimit, dailyTokenLimit: row.usageOnly ? null : row.dailyTokenLimit ?? row.profileDailyTokenLimit, dailyTokenLimitOverride: row.dailyTokenLimit, maxOutputTokens: row.usageOnly ? null : row.maxOutputTokens, allowedModels: JSON.parse(row.allowedModels) };
 }
 
 export async function createWorkspaceUser(input, actor = "owner") {
@@ -155,12 +155,14 @@ export async function authenticateWorkspaceUser(email, secret) {
 function ledgerUsage(db, column, id, period, day = null) {
   // ponytail: scan one indexed monthly ledger; add daily/profile rollups if request volume makes this expensive.
   return db.get(`SELECT COALESCE(SUM(CASE WHEN status = 'settled' THEN actualTokens ELSE 0 END), 0) AS consumed,
+    COALESCE(SUM(CASE WHEN status = 'settled' THEN inputTokens ELSE 0 END), 0) AS inputTokens,
+    COALESCE(SUM(CASE WHEN status = 'settled' THEN outputTokens ELSE 0 END), 0) AS outputTokens,
     COALESCE(SUM(CASE WHEN status != 'settled' THEN reservedTokens ELSE 0 END), 0) AS reserved
     FROM workspaceRequests WHERE ${column} = ? AND period = ?${day ? " AND substr(createdAt, 1, 10) = ?" : ""}`, [id, period, ...(day ? [day] : [])]);
 }
 
 const dailyUsage = (db, userId, day) => ledgerUsage(db, "userId", userId, day.slice(0, 7), day);
-const balance = (usage, limit, period, resetsAt) => ({ ...usage, limit, remaining: limit === null ? null : Math.max(0, limit - usage.consumed - usage.reserved), period, resetsAt });
+const balance = (usage, limit, period, resetsAt) => ({ ...usage, unclassifiedTokens: Math.max(0, usage.consumed - usage.inputTokens - usage.outputTokens), limit, remaining: limit === null ? null : Math.max(0, limit - usage.consumed - usage.reserved), period, resetsAt });
 
 function sharedBudget(db, profileId, policy, now, period = currentPeriod(now)) {
   if (policy.usageOnly || policy.quotaMode !== "shared") return null;
@@ -177,7 +179,7 @@ export async function getUserBudget(id, period = null) {
   if (!user) fail("User not found", 404);
   const counter = db.get("SELECT consumed, reserved FROM workspacePeriods WHERE userId = ? AND period = ?", [id, period]) || { consumed: 0, reserved: 0 };
   const day = currentDay(now), daily = dailyUsage(db, id, day);
-  const budget = { ...balance(counter, user.tokenLimit, period, nextReset(now)), daily: balance(daily, user.dailyTokenLimit, day, nextDailyReset(now)),
+  const budget = { ...balance({ ...ledgerUsage(db, "userId", id, period), ...counter }, user.tokenLimit, period, nextReset(now)), daily: balance(daily, user.dailyTokenLimit, day, nextDailyReset(now)),
     shared: sharedBudget(db, user.profileId, user, now, period) };
   return { ...budget, available: user.usageOnly ? null : Math.min(budget.remaining, budget.daily.remaining ?? Infinity, budget.shared?.remaining ?? Infinity, budget.shared?.daily.remaining ?? Infinity) };
 }
@@ -241,8 +243,14 @@ export async function reserveWorkspaceTokens(keyId, tokens, model) {
   return { id, userId: key.userId, tokens, period };
 }
 
-export async function settleWorkspaceTokens(id, actualTokens, source = "provider", note = null, actor = null) {
+export async function settleWorkspaceTokens(id, actualTokens, source = "provider", note = null, actor = null, breakdown = null) {
   integer(actualTokens, "Actual tokens", 0, 1_000_000_000_000);
+  let inputTokens = null, outputTokens = null;
+  if (breakdown !== null) {
+    inputTokens = integer(breakdown.inputTokens, "Input tokens", 0, actualTokens);
+    outputTokens = integer(breakdown.outputTokens, "Output tokens", 0, actualTokens);
+    if (inputTokens + outputTokens > actualTokens) fail("Input and output tokens cannot exceed the total");
+  }
   const db = await getAdapter();
   return db.transaction(() => {
     const row = db.get("SELECT * FROM workspaceRequests WHERE id = ?", [id]);
@@ -250,7 +258,7 @@ export async function settleWorkspaceTokens(id, actualTokens, source = "provider
     if (row.status === "settled") return row;
     if (actor && row.status !== "uncertain") fail("Only held requests can be reconciled", 409);
     db.run("UPDATE workspacePeriods SET reserved = reserved - ?, consumed = consumed + ? WHERE userId = ? AND period = ?", [row.reservedTokens, actualTokens, row.userId, row.period]);
-    db.run("UPDATE workspaceRequests SET status = 'settled', actualTokens = ?, source = ?, note = ?, settledAt = ? WHERE id = ?", [actualTokens, source, note, new Date().toISOString(), id]);
+    db.run("UPDATE workspaceRequests SET status = 'settled', actualTokens = ?, inputTokens = ?, outputTokens = ?, source = ?, note = ?, settledAt = ? WHERE id = ?", [actualTokens, inputTokens, outputTokens, source, note, new Date().toISOString(), id]);
     if (actor) audit(db, actor, "request.reconciled", id, { actualTokens, note });
     return db.get("SELECT * FROM workspaceRequests WHERE id = ?", [id]);
   });

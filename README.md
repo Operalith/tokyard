@@ -6,7 +6,7 @@ TokYard is a self-hosted AI gateway for small teams. Connect provider accounts o
 
 An independent MIT-licensed fork of [9router](https://github.com/decolua/9router), maintained by [Operalith](https://github.com/Operalith).
 
-> **0.1.0-alpha.3:** working user management and token accounting, with a new Workspace interface. Use one server process and a persistent local SQLite database. This is not a production billing platform or a claim of support for every inherited provider.
+> **0.1.0-alpha.4:** working user management and token accounting, with a new Workspace interface. Use one server process and a persistent local SQLite database. This is not a production billing platform or a claim of support for every inherited provider.
 
 ![TokYard Workspace with local test data](docs/tokyard/workspace.png)
 
@@ -83,6 +83,8 @@ Members can open **My workspace → Change password**, enter their current passw
 
 ## How allowances work
 
+Owner and member dashboards show **Input tokens**, **Output tokens** and **Total tokens** for each person, both daily and monthly. Input includes cache reads/writes as reported by the provider. The split is stored per request and aggregated across that person’s keys. Historical totals and manual reconciliations without a known split appear as **Unclassified tokens**; missing usage remains held and is excluded from verified consumption. Unclassified tokens are included in the total, so input + output + unclassified = total.
+
 Allowances count **input + output tokens**, including cache input. Each user has a monthly allowance and an optional daily cap, shared across every one of their keys and provider accounts. Every request must fit both limits. The same usage counts toward both periods; tokens are not charged twice. Profile changes affect existing users unless an individual allowance override is set. In **Edit access**, leave a personal limit empty to inherit the profile. Lowering a limit preserves earlier consumption and outstanding holds.
 
 Increasing a profile allowance applies to existing keys immediately, without restarting or signing in again. Changing a monthly limit from 10,000 to 25,000 after consuming 10,000 leaves 15,000 available, minus any held tokens; it does not add 25,000 credits. The dashboard labels profile inheritance and personal overrides. Insufficient-allowance errors include the effective limit, used and held tokens, remaining balance, and minimum reservation needed for that request. A large conversation can still exceed the new balance: shorten its history or raise the effective limit.
@@ -109,9 +111,11 @@ This is admission control with conservative reservations, **not an external prov
 
 ### Usage only
 
-In **Profiles → New profile / Edit profile → Quota mode**, choose **Usage only · track without token budgets**, then assign people to that profile in **People & quotas**. Their daily/monthly usage and request history remain visible, aggregated across their API keys. Personal overrides and shared pool limits do not stop requests in this mode; the dashboard displays **No cap**. Model allowlists, concurrency limits, output-per-request controls, authentication and paused/revoked access still apply. Provider limits still apply as well.
+In **Profiles → New profile / Edit profile → Quota mode**, choose **Usage only · track without token budgets**, then assign people to that profile in **People & quotas**. Their daily/monthly input tokens, output tokens, total tokens and request history remain visible, aggregated across their API keys. Personal overrides and shared pool limits do not stop requests in this mode; the dashboard displays **No cap**. TokYard does not apply the saved profile output cap in this mode: an explicit client output limit is preserved, and an omitted limit is left to the model/provider defaults. Model allowlists, concurrency limits, authentication and paused/revoked access still apply. Model/provider output and context limits still apply.
 
-Switching an existing profile to Usage only preserves its saved limits, earlier consumption and pending/unknown requests. Switching back to Fixed or Shared resumes limits against the same recorded usage. Missing provider usage stays held for review and is never presented as a verified total. Usage-only is opt-in; existing profiles retain their limits after an upgrade.
+Fixed and Shared profiles accept output caps above 32,768 tokens; this does not increase a model/provider’s actual capacity.
+
+Switching an existing profile to Usage only preserves its saved limits (including its output cap), earlier consumption and pending/unknown requests. Switching back to Fixed or Shared resumes limits against the same recorded usage. Missing provider usage stays held for review and is never presented as a verified total. When a Usage-only request omits its output limit, its hold contains the conservative input estimate only; unknown output still needs owner reconciliation from provider logs, especially before resuming token budgets. Usage-only is opt-in; existing profiles retain their limits after an upgrade.
 
 ### Running alongside 9router
 

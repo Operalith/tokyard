@@ -34,16 +34,17 @@ test("JSON response settles raw usage and clamps output before dispatch", async 
   expect(response.status).toBe(200);
   expect((await response.json()).choices[0].message.content).toBe("Hi");
   expect(response.headers.get("x-tokyard-request-id")).toBeTruthy();
-  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 42, reserved: 0 });
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 42, inputTokens: 37, outputTokens: 5, unclassifiedTokens: 0, reserved: 0 });
 });
 
 test.each(["/v1/chat/completions", "/v1/messages", "/v1/responses"])("usage-only %s tracks usage with exhausted personal and shared limits", async url => {
   await w.saveProfile({ usageOnly: true, tokenLimit: 0, dailyTokenLimit: 0, quotaMode: "shared", sharedTokenLimit: 0, sharedDailyTokenLimit: 0 }, "standard");
   await w.updateWorkspaceUser(user.id, { tokenLimit: 0, dailyTokenLimit: 0 });
   for (const clientKey of [key, await w.createWorkspaceKey(user.id, "Another client")]) {
-    const response = await meter(request(clientKey.key, { max_tokens: 9000 }, url), async req => {
+    const response = await meter(request(clientKey.key, { max_tokens: 131072 }, url), async req => {
       const body = await req.json();
-      expect(body.max_output_tokens ?? body.max_tokens).toBe(4096);
+      expect(body.max_output_tokens ?? body.max_tokens).toBe(131072);
+      expect(req.tokyardMeter.outputCap).toBe(131072);
       req.tokyardMeter.onDispatch();
       req.tokyardMeter.onUsage({ prompt_tokens: 700000, completion_tokens: 7 });
       return Response.json({});
@@ -57,6 +58,36 @@ test.each(["/v1/chat/completions", "/v1/messages", "/v1/responses"])("usage-only
   expect(dispatch).not.toHaveBeenCalled();
 });
 
+test.each(["/v1/chat/completions", "/v1/messages", "/v1/responses"])("usage-only %s leaves omitted output limits unset and settles actual usage", async url => {
+  await w.saveProfile({ usageOnly: true, maxOutputTokens: 1 }, "standard");
+  const original = request(key.key, {}, url);
+  const inputBound = Buffer.byteLength(await original.clone().text()) + 2048;
+  const response = await meter(original, async req => {
+    const body = await req.json();
+    for (const field of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) expect(body[field]).toBeUndefined();
+    expect(req.tokyardMeter.outputCap).toBeNull();
+    expect((await w.getUserBudget(user.id)).reserved).toBe(inputBound);
+    req.tokyardMeter.onDispatch();
+    req.tokyardMeter.onUsage({ prompt_tokens: 20, completion_tokens: 65536 });
+    return Response.json({});
+  });
+  expect(response.status).toBe(200);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 65556, reserved: 0 });
+});
+
+test.each(["fixed", "shared"])("%s profiles enforce configured output caps above 32K", async quotaMode => {
+  await w.saveProfile({ maxOutputTokens: 131072, quotaMode, sharedTokenLimit: 1000000 }, "standard");
+  const response = await meter(request(key.key, { max_completion_tokens: 200000 }), async req => {
+    expect((await req.json()).max_completion_tokens).toBe(131072);
+    expect(req.tokyardMeter.outputCap).toBe(131072);
+    req.tokyardMeter.onDispatch();
+    req.tokyardMeter.onUsage({ prompt_tokens: 10, completion_tokens: 65536 });
+    return Response.json({});
+  });
+  expect(response.status).toBe(200);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 65546, reserved: 0 });
+});
+
 test("usage-only streams settle, missing usage stays visible, and revoked keys cannot dispatch", async () => {
   await w.saveProfile({ usageOnly: true, tokenLimit: 0, dailyTokenLimit: 0 }, "standard");
   const response = await meter(request(key.key, { stream: true }), async req => {
@@ -68,7 +99,7 @@ test("usage-only streams settle, missing usage stays visible, and revoked keys c
   await response.text();
   const missing = await meter(request(key.key), async req => { req.tokyardMeter.onDispatch(); return Response.json({}); });
   expect(missing.status).toBe(200);
-  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 20, limit: null });
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 20, inputTokens: 15, outputTokens: 5, limit: null });
   expect((await w.listWorkspaceRequests(user.id)).some(row => row.status === "uncertain")).toBe(true);
   await w.revokeWorkspaceKey(user.id, key.id);
   const dispatch = vi.fn();
