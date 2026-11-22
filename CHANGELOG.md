@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.3 — 2026-11-22
+
+- Let members change their own password from My workspace after entering the current password and confirming the new one.
+- Invalidate all of that member's dashboard sessions after a change, while preserving API keys, usage and access settings.
+- Add a separate password-change attempt limit and protect against stale sessions, concurrent changes, cross-origin requests and changes to another member's account.
+- Return members to the Member sign-in form with a password-change confirmation.
+
 ## 0.1.0-alpha.2 — 2026-11-22
 
 - Add opt-in Usage only profiles: track each member's daily/monthly tokens across their API keys without enforcing personal or shared token budgets. Preserve saved limits, earlier usage and held requests when switching modes.

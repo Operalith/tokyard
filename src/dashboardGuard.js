@@ -219,7 +219,7 @@ export async function proxy(request) {
   const session = await getDashboardAuthSession(request.cookies.get(DASHBOARD_AUTH_COOKIE)?.value);
   if (session?.role === "member" && !isPublicLlmApi(pathname)) {
     if (pathname.startsWith("/api/")) {
-      const allowed = pathname === "/api/auth/status" || pathname === "/api/auth/logout" || pathname === "/api/workspace" || pathname === "/api/workspace/keys" || pathname.startsWith("/api/workspace/keys/");
+      const allowed = pathname === "/api/auth/status" || pathname === "/api/auth/logout" || pathname === "/api/workspace" || pathname === "/api/workspace/password" || pathname === "/api/workspace/keys" || pathname.startsWith("/api/workspace/keys/");
       if (!allowed) return NextResponse.json({ error: "Administrator access required" }, { status: 403 });
       return NextResponse.next();
     } else if (pathname.startsWith("/dashboard") && !["/dashboard", "/dashboard/support"].includes(pathname)) {
