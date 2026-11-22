@@ -1,7 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.1.0-alpha.2 — 2026-11-22
 
+- Add opt-in Usage only profiles: track each member's daily/monthly tokens across their API keys without enforcing personal or shared token budgets. Preserve saved limits, earlier usage and held requests when switching modes.
+- Add optional daily token allowances, personal overrides and shared daily/monthly profile pools.
+- Choose allowed models from active connections with search, saved-selection preservation and retry support.
+- Apply profile allowance increases immediately and explain insufficient balances with used, held and required tokens.
+- Isolate TokYard cookies from 9router and separate owner/member login lockouts.
+- Preserve metered output caps through provider translation and retain uncertain upstream usage for reconciliation.
+- Fix upgrades from older databases without workspace tables; add an additive upgrade for usage-only profiles while retaining existing limits.
 - Replace external donation links with Bitcoin support: mainnet address, verified QR, clipboard action and wallet link.
 - Fix sidebar Profiles/Activity navigation, active states and browser history.
 - Restore Token Saver access and add an owner tools directory for inherited gateway features.
@@ -17,4 +24,4 @@
 - Introduce the Workspace dashboard, personal member view, sign-in page, jade theme and optional donation destination.
 - Disable upstream self-updates, tracking and incomplete JSON backups; add focused CI checks and setup documentation.
 
-This is an initial alpha. See README for provider accounting and deployment boundaries.
+TokYard remains an alpha. See README for provider accounting and deployment boundaries.

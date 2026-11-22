@@ -6,7 +6,7 @@ TokYard is a self-hosted AI gateway for small teams. Connect provider accounts o
 
 An independent MIT-licensed fork of [9router](https://github.com/decolua/9router), maintained by [Operalith](https://github.com/Operalith).
 
-> **0.1 alpha:** working user management and token accounting, with a new Workspace interface. Use one server process and a persistent local SQLite database. This is not a production billing platform or a claim of support for every inherited provider.
+> **0.1.0-alpha.2:** working user management and token accounting, with a new Workspace interface. Use one server process and a persistent local SQLite database. This is not a production billing platform or a claim of support for every inherited provider.
 
 ![TokYard Workspace with local test data](docs/tokyard/workspace.png)
 
