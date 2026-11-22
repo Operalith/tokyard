@@ -51,19 +51,22 @@ export async function meterWorkspaceChat(request, dispatch) {
     ].filter(([, , balance]) => balance.remaining !== null);
     const limitingBalance = balances.reduce((smallest, entry) => !smallest || entry[2].remaining <= smallest[2].remaining ? entry : smallest, null);
     const remaining = limitingBalance?.[2].remaining ?? Infinity;
-    const output = Math.min(requestedOutput, user.maxOutputTokens, remaining - inputBound);
-    if (output < 1) {
+    const output = user.usageOnly ? requestedOutput : Math.min(requestedOutput, user.maxOutputTokens, remaining - inputBound);
+    if (output !== null && output < 1) {
       const [period, source, balance] = limitingBalance;
       throw new WorkspaceError(`Insufficient ${period} token allowance for this request: ${balance.remaining} remaining (${balance.limit} ${source} limit, ${balance.consumed} used, ${balance.reserved} held); at least ${inputBound + 1} required. Reduce request history or increase the ${period} ${source} limit.`, 429);
     }
     const path = new URL(request.url).pathname;
     const field = path.endsWith("/responses") || path.startsWith("/codex/") ? "max_output_tokens" : body.max_completion_tokens !== undefined ? "max_completion_tokens" : "max_tokens";
-    for (const name of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) delete body[name];
-    body[field] = output;
+    if (output !== null) {
+      for (const name of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) delete body[name];
+      body[field] = output;
+    }
     if (body.stream === true && path.endsWith("/chat/completions")) body.stream_options = { ...body.stream_options, include_usage: true };
-    reservation = await reserveWorkspaceTokens(key.id, inputBound + output, body.model);
+    // With no client output limit, usage-only holds contain the input estimate only.
+    reservation = await reserveWorkspaceTokens(key.id, inputBound + (output ?? 0), body.model);
     context = {
-      keyId: key.id, dispatches: 0, usage: null, outputCap: output,
+      keyId: key.id, dispatches: 0, usage: null, breakdown: null, outputCap: output,
       onDispatch() { this.dispatches += 1; },
       onUsage(usage) {
         if (usage?.estimated) return;
@@ -71,7 +74,10 @@ export async function meterWorkspaceChat(request, dispatch) {
         const normalized = canonicalizeUsage(usage);
         if (!normalized) return;
         const input = normalized.prompt_tokens, output = normalized.completion_tokens;
-        if ([input, output].every(n => Number.isSafeInteger(n) && n >= 0)) this.usage = Math.max(input + output, Number.isSafeInteger(usage.total_tokens) ? usage.total_tokens : 0);
+        if ([input, output].every(n => Number.isSafeInteger(n) && n >= 0)) {
+          this.usage = Math.max(input + output, Number.isSafeInteger(usage.total_tokens) ? usage.total_tokens : 0);
+          this.breakdown = { inputTokens: input, outputTokens: output };
+        }
       },
     };
     const headers = new Headers(request.headers);
@@ -80,7 +86,7 @@ export async function meterWorkspaceChat(request, dispatch) {
     metered.tokyardMeter = context;
     let finished = null;
     const finish = (reason) => finished ||= (async () => {
-      if (context.usage !== null && context.dispatches <= 1) await settleWorkspaceTokens(reservation.id, context.usage);
+      if (context.usage !== null && context.dispatches <= 1) await settleWorkspaceTokens(reservation.id, context.usage, "provider", null, null, context.breakdown);
       else if (context.dispatches === 0) await settleWorkspaceTokens(reservation.id, 0, "local");
       else await markWorkspaceUncertain(reservation.id, reason || "No reliable final usage; reservation remains held for reconciliation");
     })();

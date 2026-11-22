@@ -98,6 +98,9 @@ try {
   assert.match(await second.text(), /Hello/);
   const workspace = await (await call("/api/workspace", ownerGet)).json();
   assert.equal(workspace.users[0].budget.consumed, 60);
+  assert.equal(workspace.users[0].budget.inputTokens, 40);
+  assert.equal(workspace.users[0].budget.outputTokens, 20);
+  assert.equal(workspace.users[0].budget.unclassifiedTokens, 0);
   assert.equal(workspace.users[0].budget.reserved, 0);
   assert.equal(workspace.users[0].budget.daily.limit, 10000);
   assert.equal(workspace.users[0].budget.daily.consumed, 60);
@@ -192,6 +195,7 @@ try {
       await page.reload(); await heading("A policy for every team.");
       await page.getByRole("button", { name: "Edit profile", exact: true }).click();
       await page.getByLabel("Quota mode", { exact: false }).selectOption("shared");
+      await page.getByLabel("Output tokens / request", { exact: false }).fill("131072");
       await page.getByLabel("Shared monthly token allowance", { exact: false }).fill("");
       await page.getByLabel("Shared daily token allowance", { exact: false }).fill("");
       await page.getByRole("button", { name: "Save changes", exact: true }).click();
@@ -220,6 +224,7 @@ try {
       await page.reload(); await heading("A policy for every team.");
       assert.equal((await (await call("/api/workspace", ownerGet)).json()).profiles[0].dailyTokenLimit, 5000);
       const savedPool = (await (await call("/api/workspace", ownerGet)).json()).profiles[0];
+      assert.equal(savedPool.maxOutputTokens, 131072, "Profile output caps above 32K must save");
       assert.equal(savedPool.quotaMode, "shared");
       assert.equal(savedPool.sharedTokenLimit, 12000);
       assert.equal(savedPool.sharedDailyTokenLimit, 6000);
@@ -325,6 +330,11 @@ try {
       assert.equal(memberPool.budget.shared.consumed, 150);
       // Tighter of personal daily (5000 − member's 120) and shared daily (6000 − 150).
       assert.equal(memberPool.budget.available, 4880);
+      assert.equal(memberPool.budget.inputTokens, 80);
+      assert.equal(memberPool.budget.outputTokens, 40);
+      await page.getByLabel("Monthly token usage", { exact: true }).getByText("80", { exact: true }).waitFor();
+      await page.getByLabel("Monthly token usage", { exact: true }).getByText("40", { exact: true }).waitFor();
+      await page.getByLabel("Monthly token usage", { exact: true }).getByText("120", { exact: true }).waitFor();
       assert.equal(memberPool.users, undefined, "Members must see aggregate pool usage without other members' records");
       assert.equal(await page.getByRole("meter", { name: "Daily tokens used and held", exact: true }).getAttribute("aria-valuemax"), "5000");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Daily allowance must fit mobile width");
@@ -339,6 +349,7 @@ try {
       await page.getByRole("button", { name: "Edit profile", exact: true }).click();
       await page.getByLabel("Quota mode", { exact: false }).selectOption("usage");
       assert.equal(await page.locator('input[name="tokenLimit"]').count(), 0, "Usage-only needs no numeric monthly allowance");
+      assert.equal(await page.locator('input[name="maxOutputTokens"]').count(), 0, "Usage-only must not expose a profile output cap");
       await page.screenshot({ path: path.join(root, ".tokyard/preview/usage-only-profile-mobile.png") });
       await page.getByRole("button", { name: "Save changes", exact: true }).click();
       await page.getByRole("dialog").waitFor({ state: "hidden" });
@@ -347,9 +358,11 @@ try {
       assert.equal(trackedProfile.usageOnly, true);
       assert.equal(trackedProfile.tokenLimit, 25000, "Switching mode must preserve the saved monthly cap");
       assert.equal(trackedProfile.sharedTokenLimit, 12000, "Switching mode must preserve the saved pool cap");
+      assert.equal(trackedProfile.maxOutputTokens, 131072, "Switching mode must preserve the saved output cap");
       await page.context().addCookies([{ name: "tokyard_auth_token", value: member.slice("tokyard_auth_token=".length), url: base }]);
       await page.goto(`${base}/dashboard`); await heading("Welcome, Smoke.");
       await page.getByRole("heading", { name: "Your usage", exact: true }).waitFor();
+      await page.getByText("Model / client limit", { exact: true }).waitFor();
       assert.equal(await page.getByRole("meter").count(), 0, "Usage-only must not display capped usage bars");
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "Usage-only must fit mobile width");
       await page.screenshot({ path: path.join(root, ".tokyard/preview/usage-only-member-mobile.png"), fullPage: true });
@@ -430,7 +443,10 @@ try {
   const trackedUser = (await (await call("/api/workspace/users", json({ name: "Tracked member", email: "tracked@example.test", password, profileId: trackingProfile.id }, owner), 201)).json()).user;
   const trackedKey = (await (await call("/api/workspace/keys", json({ userId: trackedUser.id, name: "Tracked client" }, owner), 201)).json()).key;
   await call(`/api/workspace/users/${trackedUser.id}`, json({ tokenLimit: 0, dailyTokenLimit: 0 }, owner, "PATCH"));
-  await (await call("/v1/chat/completions", inference(trackedKey))).json();
+  const largeOutput = inference(trackedKey);
+  largeOutput.body = JSON.stringify({ ...JSON.parse(largeOutput.body), max_tokens: 131072 });
+  await (await call("/v1/chat/completions", largeOutput)).json();
+  assert.equal(lastBody.max_tokens ?? lastBody.max_completion_tokens, 131072, "Usage-only must ignore the saved 4096 output cap");
   await (await call("/v1/chat/completions", inference(trackedKey, true))).text();
   const trackedBudget = (await (await call("/api/workspace", ownerGet)).json()).users.find(person => person.id === trackedUser.id).budget;
   assert.equal(trackedBudget.limit, null);
@@ -439,6 +455,9 @@ try {
   assert.equal(trackedBudget.reserved, 0);
   assert.equal(trackedBudget.available, null);
   assert.equal(trackedBudget.shared, null);
+  assert.equal(trackedBudget.inputTokens, 40);
+  assert.equal(trackedBudget.outputTokens, 20);
+  assert.equal(trackedBudget.unclassifiedTokens, 0);
   await call(`/api/workspace/profiles/${trackingProfile.id}`, json({ usageOnly: false }, owner, "PATCH"));
   await call("/v1/chat/completions", inference(trackedKey), 429);
   assert.equal(dispatched, 8, "Usage-only must track JSON and SSE with zero saved limits, then enforce limits when disabled");

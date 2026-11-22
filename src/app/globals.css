@@ -721,8 +721,13 @@ button:disabled,
 .yard-budget-label>span { color:var(--color-text-muted); font-size:9px; }
 .yard-budget-footer { margin-top:10px; font-size:9px; color:var(--color-text-muted); }
 .yard-held-text { color:var(--yard-warning); }
+/* Actual provider usage; unclassified totals stay visible for older requests. */
+.yard-token-breakdown { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:14px; }
+.yard-token-breakdown dt { color:var(--color-text-muted); font-size:9px; }
+.yard-token-breakdown dd { margin:4px 0 0; font-size:12px; overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.yard-token-breakdown .unclassified { grid-column:1/-1; display:flex; justify-content:space-between; align-items:baseline; }
 .yard-access-details { padding:0 20px 17px; font-size:10px; }
-.yard-access-details>div,.yard-profile dl>div { display:flex; justify-content:space-between; gap:10px; margin-bottom:9px; }
+.yard-access-details>div,.yard-profile>dl>div { display:flex; justify-content:space-between; gap:10px; margin-bottom:9px; }
 .yard-access-details dt,.yard-profile dt { color:var(--color-text-muted); }
 .yard-inspector-actions { display:flex; gap:5px; padding:14px 20px; border-top:1px solid var(--color-border-subtle); }
 .yard-inspector-actions .yard-button { flex:1; font-size:10px; }
@@ -756,7 +761,7 @@ button:disabled,
 .yard-profile p { font-size:11px; color:var(--color-text-muted); margin-bottom:24px; }
 .yard-profile>strong { font-size:22px; font-weight:500; letter-spacing:-.7px; }
 .yard-profile>strong small { font-size:10px; color:var(--color-text-muted); letter-spacing:0; }
-.yard-profile dl { border-block:1px solid var(--color-border); padding-block:16px 8px; margin-block:18px; font-size:11px; }
+.yard-profile>dl { border-block:1px solid var(--color-border); padding-block:16px 8px; margin-block:18px; font-size:11px; }
 .yard-profile>.yard-button { width:100%; justify-content:space-between; }
 .yard-footer { display:flex; justify-content:space-between; flex-wrap:wrap; gap:14px; margin-top:30px; padding-block:6px; font-size:9px; color:var(--color-text-muted); }
 .yard-footer a { display:flex; align-items:center; gap:6px; }

@@ -176,6 +176,17 @@ test("usage-only profiles ignore all token budgets and personal overrides withou
   await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toMatchObject({ status: 429 });
 });
 
+test("profile output caps above 32K are validated, ignored in usage-only and restored on return", async () => {
+  for (const maxOutputTokens of [0, -1, 1.5, "131072", null, 1_000_000_000_001]) await expect(w.saveProfile({ maxOutputTokens }, "standard")).rejects.toThrow("Output token limit");
+  await w.saveProfile({ maxOutputTokens: 131072 }, "standard");
+  expect((await w.getWorkspaceUser(user.id)).maxOutputTokens).toBe(131072);
+  await w.saveProfile({ usageOnly: true }, "standard");
+  expect((await w.getWorkspaceUser(user.id)).maxOutputTokens).toBeNull();
+  expect((await w.listProfiles())[0].maxOutputTokens).toBe(131072);
+  await w.saveProfile({ usageOnly: false }, "standard");
+  expect((await w.getWorkspaceUser(user.id)).maxOutputTokens).toBe(131072);
+});
+
 test("usage-only keeps access and concurrency controls, and uncertain usage never blocks the token budget", async () => {
   await w.saveProfile({ usageOnly: true, maxConcurrent: 1 }, "standard");
   const held = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
@@ -186,6 +197,41 @@ test("usage-only keeps access and concurrency controls, and uncertain usage neve
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 30, reserved: 100, remaining: null });
   await w.updateWorkspaceUser(user.id, { isActive: false });
   await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toMatchObject({ status: 403 });
+});
+
+test("input/output splits aggregate across keys without counting held or other users' usage", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-22T12:00:00Z"));
+  const second = await w.createWorkspaceKey(user.id, "Second client");
+  const first = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await expect(w.settleWorkspaceTokens(first.id, 60, "provider", null, null, { inputTokens: 50, outputTokens: 20 })).rejects.toThrow("exceed the total");
+  await expect(w.settleWorkspaceTokens(first.id, 60, "provider", null, null, { inputTokens: -1, outputTokens: 20 })).rejects.toThrow("Input tokens");
+  await w.settleWorkspaceTokens(first.id, 60, "provider", null, null, { inputTokens: 30, outputTokens: 20 });
+  await w.settleWorkspaceTokens(first.id, 60, "provider", null, null, { inputTokens: 0, outputTokens: 0 });
+  const next = await w.reserveWorkspaceTokens(second.id, 100, "claude/test");
+  await w.settleWorkspaceTokens(next.id, 40, "provider", null, null, { inputTokens: 25, outputTokens: 15 });
+  await w.reserveWorkspaceTokens(key.id, 50, "openai/test");
+  const other = await w.createWorkspaceUser({ name: "Other", email: "other-split@example.test", password: "test-password-123" });
+  expect(await w.getUserBudget(other.id)).toMatchObject({ consumed: 0, inputTokens: 0, outputTokens: 0, unclassifiedTokens: 0 });
+  const split = { consumed: 100, inputTokens: 55, outputTokens: 35, unclassifiedTokens: 10, reserved: 50 };
+  expect(await w.getUserBudget(user.id)).toMatchObject({ ...split, daily: split });
+  vi.setSystemTime(new Date("2026-11-23T00:00:00Z"));
+  expect(await w.getUserBudget(user.id)).toMatchObject({ ...split, daily: { consumed: 0, inputTokens: 0, outputTokens: 0, unclassifiedTokens: 0, reserved: 0 } });
+});
+
+test("schema 6 upgrade preserves old totals as unclassified and keeps keys and held requests", async () => {
+  const settled = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await w.settleWorkspaceTokens(settled.id, 80);
+  await w.reserveWorkspaceTokens(key.id, 50, "openai/test");
+  for (const column of ["inputTokens", "outputTokens"]) db.exec(`ALTER TABLE workspaceRequests DROP COLUMN ${column}`);
+  db.run("UPDATE _meta SET value = '6' WHERE key = 'backupSchemaVersion'");
+  db.run("UPDATE _meta SET value = '3' WHERE key = 'schemaVersion'");
+  db.close(); delete global._dbAdapter; vi.resetModules();
+  w = await import("@/lib/workspace.js"); db = await w.ensureWorkspace();
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 80, reserved: 50, inputTokens: 0, outputTokens: 0, unclassifiedTokens: 80, daily: { consumed: 80, unclassifiedTokens: 80 } });
+  expect(db.get("SELECT inputTokens, outputTokens FROM workspaceRequests WHERE id = ?", [settled.id])).toEqual({ inputTokens: null, outputTokens: null });
+  expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
+  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-6-to-7-"))).toBe(true);
 });
 
 test("schema 5 upgrade preserves existing quotas, keys, consumption and held usage", async () => {
@@ -200,7 +246,7 @@ test("schema 5 upgrade preserves existing quotas, keys, consumption and held usa
   expect((await w.listProfiles())[0]).toMatchObject({ usageOnly: false, tokenLimit: 1000000 });
   expect(await w.getUserBudget(user.id)).toMatchObject({ limit: 1000000, consumed: 80, reserved: 50 });
   expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
-  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-5-to-6-"))).toBe(true);
+  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-5-to-7-"))).toBe(true);
 });
 
 test("daily allowance is atomic across keys and providers; monthly cap still applies", async () => {
@@ -273,7 +319,7 @@ test("schema 3 upgrade preserves keys, monthly counters and today's settled and 
   w = await import("@/lib/workspace.js");
   db = await w.ensureWorkspace();
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 80, reserved: 50, daily: { limit: null, consumed: 80, reserved: 50 } });
-  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("6");
+  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("7");
   expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
   await w.saveProfile({ dailyTokenLimit: 130 }, "standard");
   await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Daily");

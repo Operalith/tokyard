@@ -1,6 +1,6 @@
 {
   "name": "tokyard",
-  "version": "0.1.0-alpha.3",
+  "version": "0.1.0-alpha.4",
   "description": "Shared AI access with individual users, profiles, and token budgets",
   "private": true,
   "engines": {
