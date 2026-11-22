@@ -14,6 +14,7 @@ An independent MIT-licensed fork of [9router](https://github.com/decolua/9router
 
 - Owner and member sign-in, with separate permissions.
 - Profiles with monthly allowances, optional daily caps, model allowlists, concurrency limits and output caps.
+- Usage-only profiles that track each person's tokens without daily, monthly or shared token budgets.
 - Individual allowance overrides, immediate pause/resume and password resets by the owner.
 - Multiple API keys per person, sharing one allowance. Member secrets are shown once and stored as SHA-256 hashes.
 - Reservations before upstream calls, automatic settlement from provider-reported usage, and a request ledger.
@@ -87,7 +88,7 @@ Daily totals come from the existing request ledger, so enabling a daily cap incl
 
 ### Fixed and shared profile budgets
 
-Profiles start in **Fixed** mode: every person has a separate allowance. In **Edit profile → Quota sharing**, choose **Shared** to let everyone on that profile draw from one pool. Set a **Shared monthly token allowance**, a **Shared daily token allowance**, or both. Empty means no pool cap for that period; at least one pool limit is required. A limit of `0` stops new pool requests. Different profiles have separate pools.
+Profiles start in **Fixed** mode: every person has a separate allowance. In **Edit profile → Usage policy**, choose **Shared** to let everyone on that profile draw from one pool. Set a **Shared monthly token allowance**, a **Shared daily token allowance**, or both. Empty means no pool cap for that period; at least one pool limit is required. A limit of `0` stops new pool requests. Different profiles have separate pools.
 
 The existing monthly/daily allowances are still **maximums per person**, including all pool use. Personal overrides still apply and cannot bypass the pool. For example, a 20,000-token pool and a 20,000-token maximum per person allow one member to use 2,000 and another to use 18,000. A member with a 10,000 personal maximum still stops at 10,000; raise that maximum if they may borrow more of the pool. There is no fixed slice held aside for each person: access is first come, first served. Use Fixed mode when individual shares must stay separate. Unused daily/monthly pool tokens do not carry forward.
 
@@ -102,6 +103,12 @@ Reliable provider usage settles the reservation to its reported total. A request
 A late response settles against its original day and month. Daily limits reset at 00:00 UTC; monthly limits reset at 00:00 UTC on the first day of the month. Holds from an earlier day still affect their original monthly allowance. The dashboard shows the latest 100 requests; older ledger rows remain in the database and count toward daily totals.
 
 This is admission control with conservative reservations, **not an external provider spending guarantee**. A provider may tokenize differently, inject context, ignore output caps or report more tokens than reserved. Reported totals are recorded even if that exceeds the current allowance; new requests then stop. Provider invoices and rate limits remain authoritative.
+
+### Usage only
+
+In **Profiles → New profile / Edit profile → Quota mode**, choose **Usage only · track without token budgets**, then assign people to that profile in **People & quotas**. Their daily/monthly usage and request history remain visible, aggregated across their API keys. Personal overrides and shared pool limits do not stop requests in this mode; the dashboard displays **No cap**. Model allowlists, concurrency limits, output-per-request controls, authentication and paused/revoked access still apply. Provider limits still apply as well.
+
+Switching an existing profile to Usage only preserves its saved limits, earlier consumption and pending/unknown requests. Switching back to Fixed or Shared resumes limits against the same recorded usage. Missing provider usage stays held for review and is never presented as a verified total. Usage-only is opt-in; existing profiles retain their limits after an upgrade.
 
 ### Running alongside 9router
 

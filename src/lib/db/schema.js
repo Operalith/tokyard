@@ -3,7 +3,7 @@
 // pre-change safety backup in migrate.js: when the stored version is lower,
 // one lightweight DB backup is taken before applying schema changes. Forgetting
 // to bump only skips that backup — it does NOT break the additive auto-sync.
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export const PRAGMA_SQL = `
 PRAGMA journal_mode = WAL;
@@ -168,6 +168,7 @@ export const TABLES = {
       tokenLimit: "INTEGER NOT NULL CHECK (tokenLimit >= 0)",
       dailyTokenLimit: "INTEGER CHECK (dailyTokenLimit >= 0)",
       quotaMode: "TEXT NOT NULL DEFAULT 'fixed' CHECK (quotaMode IN ('fixed', 'shared'))",
+      usageOnly: "INTEGER NOT NULL DEFAULT 0 CHECK (usageOnly IN (0, 1))",
       sharedTokenLimit: "INTEGER CHECK (sharedTokenLimit >= 0)",
       sharedDailyTokenLimit: "INTEGER CHECK (sharedDailyTokenLimit >= 0)",
       maxConcurrent: "INTEGER NOT NULL DEFAULT 2 CHECK (maxConcurrent >= 1)",

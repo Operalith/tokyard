@@ -37,6 +37,45 @@ test("JSON response settles raw usage and clamps output before dispatch", async 
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 42, reserved: 0 });
 });
 
+test.each(["/v1/chat/completions", "/v1/messages", "/v1/responses"])("usage-only %s tracks usage with exhausted personal and shared limits", async url => {
+  await w.saveProfile({ usageOnly: true, tokenLimit: 0, dailyTokenLimit: 0, quotaMode: "shared", sharedTokenLimit: 0, sharedDailyTokenLimit: 0 }, "standard");
+  await w.updateWorkspaceUser(user.id, { tokenLimit: 0, dailyTokenLimit: 0 });
+  for (const clientKey of [key, await w.createWorkspaceKey(user.id, "Another client")]) {
+    const response = await meter(request(clientKey.key, { max_tokens: 9000 }, url), async req => {
+      const body = await req.json();
+      expect(body.max_output_tokens ?? body.max_tokens).toBe(4096);
+      req.tokyardMeter.onDispatch();
+      req.tokyardMeter.onUsage({ prompt_tokens: 700000, completion_tokens: 7 });
+      return Response.json({});
+    });
+    expect(response.status).toBe(200);
+  }
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 1400014, reserved: 0, limit: null, remaining: null, available: null, shared: null, daily: { limit: null, consumed: 1400014 } });
+  await w.saveProfile({ usageOnly: false }, "standard");
+  const dispatch = vi.fn();
+  expect((await meter(request(key.key), dispatch)).status).toBe(429);
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+test("usage-only streams settle, missing usage stays visible, and revoked keys cannot dispatch", async () => {
+  await w.saveProfile({ usageOnly: true, tokenLimit: 0, dailyTokenLimit: 0 }, "standard");
+  const response = await meter(request(key.key, { stream: true }), async req => {
+    expect((await req.json()).stream_options.include_usage).toBe(true);
+    req.tokyardMeter.onDispatch();
+    req.tokyardMeter.onUsage({ prompt_tokens: 15, completion_tokens: 5 });
+    return new Response("data: [DONE]\n\n", { headers: { "content-type": "text/event-stream" } });
+  });
+  await response.text();
+  const missing = await meter(request(key.key), async req => { req.tokyardMeter.onDispatch(); return Response.json({}); });
+  expect(missing.status).toBe(200);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 20, limit: null });
+  expect((await w.listWorkspaceRequests(user.id)).some(row => row.status === "uncertain")).toBe(true);
+  await w.revokeWorkspaceKey(user.id, key.id);
+  const dispatch = vi.fn();
+  expect((await meter(request(key.key), dispatch)).status).toBe(401);
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
 test("output fits the smaller daily/monthly balance and daily exhaustion blocks before dispatch", async () => {
   await w.saveProfile({ dailyTokenLimit: 3000 }, "standard");
   for (const monthlyLimit of [1000000, 2500]) {
