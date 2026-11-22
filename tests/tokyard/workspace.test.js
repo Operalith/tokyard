@@ -46,6 +46,53 @@ test("validation rejects weak passwords, invalid budgets and duplicate emails", 
   }
 });
 
+test("usage-only profiles ignore all token budgets and personal overrides without losing attribution", async () => {
+  expect((await w.listProfiles())[0].usageOnly).toBe(false);
+  for (const usageOnly of [null, 1, "true"]) await expect(w.saveProfile({ usageOnly }, "standard")).rejects.toThrow("boolean");
+  await w.saveProfile({ usageOnly: true, tokenLimit: 0, dailyTokenLimit: 0, quotaMode: "shared", sharedTokenLimit: 0, sharedDailyTokenLimit: 0 }, "standard");
+  await w.updateWorkspaceUser(user.id, { tokenLimit: 0, dailyTokenLimit: 0 });
+  const other = await w.createWorkspaceUser({ name: "Other", email: "other@example.test", password: "test-password-123" });
+  const rotated = await w.createWorkspaceKey(user.id, "Second client");
+  const first = await w.reserveWorkspaceTokens(key.id, 2000000, "openai/test");
+  await w.settleWorkspaceTokens(first.id, 1500000);
+  const next = await w.reserveWorkspaceTokens(rotated.id, 100, "claude/test");
+  await w.settleWorkspaceTokens(next.id, 80);
+  expect(await w.getWorkspaceUser(user.id)).toMatchObject({ usageOnly: true, tokenLimit: null, dailyTokenLimit: null, tokenLimitOverride: 0, dailyTokenLimitOverride: 0 });
+  expect(await w.getUserBudget(user.id)).toMatchObject({ limit: null, consumed: 1500080, reserved: 0, remaining: null, available: null, shared: null, daily: { limit: null, consumed: 1500080, remaining: null } });
+  expect((await w.getUserBudget(other.id)).consumed).toBe(0);
+  expect(await w.listWorkspaceRequests(user.id)).toHaveLength(2);
+  await w.saveProfile({ usageOnly: false }, "standard");
+  expect((await w.getUserBudget(user.id)).consumed).toBe(1500080);
+  await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toMatchObject({ status: 429 });
+});
+
+test("usage-only keeps access and concurrency controls, and uncertain usage never blocks the token budget", async () => {
+  await w.saveProfile({ usageOnly: true, maxConcurrent: 1 }, "standard");
+  const held = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await expect(w.reserveWorkspaceTokens(key.id, 100, "openai/test")).rejects.toThrow("Concurrent");
+  await w.markWorkspaceUncertain(held.id, "Missing provider usage");
+  const next = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await w.settleWorkspaceTokens(next.id, 30);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 30, reserved: 100, remaining: null });
+  await w.updateWorkspaceUser(user.id, { isActive: false });
+  await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toMatchObject({ status: 403 });
+});
+
+test("schema 5 upgrade preserves existing quotas, keys, consumption and held usage", async () => {
+  const settled = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await w.settleWorkspaceTokens(settled.id, 80);
+  await w.reserveWorkspaceTokens(key.id, 50, "openai/test");
+  db.exec("ALTER TABLE workspaceProfiles DROP COLUMN usageOnly");
+  db.run("UPDATE _meta SET value = '5' WHERE key = 'backupSchemaVersion'");
+  db.run("UPDATE _meta SET value = '2' WHERE key = 'schemaVersion'");
+  db.close(); delete global._dbAdapter; vi.resetModules();
+  w = await import("@/lib/workspace.js"); db = await w.ensureWorkspace();
+  expect((await w.listProfiles())[0]).toMatchObject({ usageOnly: false, tokenLimit: 1000000 });
+  expect(await w.getUserBudget(user.id)).toMatchObject({ limit: 1000000, consumed: 80, reserved: 50 });
+  expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
+  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-5-to-6-"))).toBe(true);
+});
+
 test("daily allowance is atomic across keys and providers; monthly cap still applies", async () => {
   await w.saveProfile({ dailyTokenLimit: 100 }, "standard");
   const second = await w.createWorkspaceKey(user.id, "Desktop");
@@ -116,7 +163,7 @@ test("schema 3 upgrade preserves keys, monthly counters and today's settled and 
   w = await import("@/lib/workspace.js");
   db = await w.ensureWorkspace();
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 80, reserved: 50, daily: { limit: null, consumed: 80, reserved: 50 } });
-  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("5");
+  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("6");
   expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
   await w.saveProfile({ dailyTokenLimit: 130 }, "standard");
   await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Daily");

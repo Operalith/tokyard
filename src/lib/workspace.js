@@ -43,7 +43,7 @@ export async function ensureWorkspace() {
   return db;
 }
 
-function profile(row) { return row ? { ...row, allowedModels: JSON.parse(row.allowedModels) } : null; }
+function profile(row) { return row ? { ...row, usageOnly: !!row.usageOnly, allowedModels: JSON.parse(row.allowedModels) } : null; }
 
 export async function listProfiles() {
   const db = await ensureWorkspace();
@@ -55,15 +55,17 @@ export async function saveProfile(input, id = null, actor = "owner") {
   const db = await ensureWorkspace();
   const existing = id ? db.get("SELECT * FROM workspaceProfiles WHERE id = ?", [id]) : null;
   if (id && !existing) fail("Profile not found", 404);
-  const data = { ...(existing ? profile(existing) : { tokenLimit: 1000000, dailyTokenLimit: null, quotaMode: "fixed", sharedTokenLimit: null, sharedDailyTokenLimit: null, maxConcurrent: 2, maxOutputTokens: 4096, allowedModels: [] }), ...input };
+  const data = { ...(existing ? profile(existing) : { tokenLimit: 1000000, dailyTokenLimit: null, quotaMode: "fixed", usageOnly: false, sharedTokenLimit: null, sharedDailyTokenLimit: null, maxConcurrent: 2, maxOutputTokens: 4096, allowedModels: [] }), ...input };
   const name = text(data.name, "Profile name", 60);
   const tokenLimit = integer(data.tokenLimit, "Token allowance", 0, 1_000_000_000_000);
   const dailyTokenLimit = data.dailyTokenLimit === null ? null : integer(data.dailyTokenLimit, "Daily token allowance", 0, 1_000_000_000_000);
   const { quotaMode } = data;
+  if (typeof data.usageOnly !== "boolean") fail("usageOnly must be a boolean");
+  const usageOnly = data.usageOnly;
   if (!["fixed", "shared"].includes(quotaMode)) fail("Quota mode must be fixed or shared");
   const sharedTokenLimit = data.sharedTokenLimit === null ? null : integer(data.sharedTokenLimit, "Shared monthly token allowance", 0, 1_000_000_000_000);
   const sharedDailyTokenLimit = data.sharedDailyTokenLimit === null ? null : integer(data.sharedDailyTokenLimit, "Shared daily token allowance", 0, 1_000_000_000_000);
-  if (quotaMode === "shared" && sharedTokenLimit === null && sharedDailyTokenLimit === null) fail("Set a shared monthly or daily allowance");
+  if (!usageOnly && quotaMode === "shared" && sharedTokenLimit === null && sharedDailyTokenLimit === null) fail("Set a shared monthly or daily allowance");
   const maxConcurrent = integer(data.maxConcurrent, "Concurrent requests", 1, 20);
   const maxOutputTokens = integer(data.maxOutputTokens, "Output token limit", 1, 32768);
   if (!Array.isArray(data.allowedModels) || data.allowedModels.length > 200 || data.allowedModels.some(m => typeof m !== "string" || !m.trim() || m.length > 256)) fail("Allowed models must contain at most 200 model identifiers");
@@ -73,7 +75,8 @@ export async function saveProfile(input, id = null, actor = "owner") {
   db.transaction(() => {
     if (id) db.run("UPDATE workspaceProfiles SET name = ?, tokenLimit = ?, dailyTokenLimit = ?, quotaMode = ?, sharedTokenLimit = ?, sharedDailyTokenLimit = ?, maxConcurrent = ?, maxOutputTokens = ?, allowedModels = ? WHERE id = ?", [name, tokenLimit, dailyTokenLimit, quotaMode, sharedTokenLimit, sharedDailyTokenLimit, maxConcurrent, maxOutputTokens, JSON.stringify(allowedModels), id]);
     else db.run("INSERT INTO workspaceProfiles(id, name, tokenLimit, dailyTokenLimit, quotaMode, sharedTokenLimit, sharedDailyTokenLimit, maxConcurrent, maxOutputTokens, allowedModels, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [profileId, name, tokenLimit, dailyTokenLimit, quotaMode, sharedTokenLimit, sharedDailyTokenLimit, maxConcurrent, maxOutputTokens, JSON.stringify(allowedModels), new Date().toISOString()]);
-    audit(db, actor, id ? "profile.updated" : "profile.created", profileId, { name, tokenLimit, dailyTokenLimit, quotaMode, sharedTokenLimit, sharedDailyTokenLimit, allowedModels });
+    db.run("UPDATE workspaceProfiles SET usageOnly = ? WHERE id = ?", [usageOnly ? 1 : 0, profileId]);
+    audit(db, actor, id ? "profile.updated" : "profile.created", profileId, { name, tokenLimit, dailyTokenLimit, quotaMode, usageOnly, sharedTokenLimit, sharedDailyTokenLimit, allowedModels });
   });
   return profile(db.get("SELECT * FROM workspaceProfiles WHERE id = ?", [profileId]));
 }
@@ -81,11 +84,11 @@ export async function saveProfile(input, id = null, actor = "owner") {
 export async function getWorkspaceUser(id) {
   const db = await getAdapter();
   const row = db.get(`SELECT u.*, p.name AS profileName, p.tokenLimit AS profileTokenLimit, p.dailyTokenLimit AS profileDailyTokenLimit,
-    p.allowedModels, p.maxConcurrent, p.maxOutputTokens, p.quotaMode, p.sharedTokenLimit, p.sharedDailyTokenLimit FROM workspaceUsers u
+    p.allowedModels, p.maxConcurrent, p.maxOutputTokens, p.quotaMode, p.usageOnly, p.sharedTokenLimit, p.sharedDailyTokenLimit FROM workspaceUsers u
     JOIN workspaceProfiles p ON p.id = u.profileId WHERE u.id = ?`, [id]);
   if (!row) return null;
   const { passwordHash, ...user } = row;
-  return { ...user, isActive: !!row.isActive, tokenLimit: row.tokenLimit ?? row.profileTokenLimit, tokenLimitOverride: row.tokenLimit, dailyTokenLimit: row.dailyTokenLimit ?? row.profileDailyTokenLimit, dailyTokenLimitOverride: row.dailyTokenLimit, allowedModels: JSON.parse(row.allowedModels) };
+  return { ...user, isActive: !!row.isActive, usageOnly: !!row.usageOnly, tokenLimit: row.usageOnly ? null : row.tokenLimit ?? row.profileTokenLimit, tokenLimitOverride: row.tokenLimit, dailyTokenLimit: row.usageOnly ? null : row.dailyTokenLimit ?? row.profileDailyTokenLimit, dailyTokenLimitOverride: row.dailyTokenLimit, allowedModels: JSON.parse(row.allowedModels) };
 }
 
 export async function createWorkspaceUser(input, actor = "owner") {
@@ -144,7 +147,7 @@ const dailyUsage = (db, userId, day) => ledgerUsage(db, "userId", userId, day.sl
 const balance = (usage, limit, period, resetsAt) => ({ ...usage, limit, remaining: limit === null ? null : Math.max(0, limit - usage.consumed - usage.reserved), period, resetsAt });
 
 function sharedBudget(db, profileId, policy, now, period = currentPeriod(now)) {
-  if (policy.quotaMode !== "shared") return null;
+  if (policy.usageOnly || policy.quotaMode !== "shared") return null;
   const day = currentDay(now);
   return { ...balance(ledgerUsage(db, "profileId", profileId, period), policy.sharedTokenLimit, period, nextReset(now)),
     daily: balance(ledgerUsage(db, "profileId", profileId, day.slice(0, 7), day), policy.sharedDailyTokenLimit, day, nextDailyReset(now)) };
@@ -160,7 +163,7 @@ export async function getUserBudget(id, period = null) {
   const day = currentDay(now), daily = dailyUsage(db, id, day);
   const budget = { ...balance(counter, user.tokenLimit, period, nextReset(now)), daily: balance(daily, user.dailyTokenLimit, day, nextDailyReset(now)),
     shared: sharedBudget(db, user.profileId, user, now, period) };
-  return { ...budget, available: Math.min(budget.remaining, budget.daily.remaining ?? Infinity, budget.shared?.remaining ?? Infinity, budget.shared?.daily.remaining ?? Infinity) };
+  return { ...budget, available: user.usageOnly ? null : Math.min(budget.remaining, budget.daily.remaining ?? Infinity, budget.shared?.remaining ?? Infinity, budget.shared?.daily.remaining ?? Infinity) };
 }
 
 export async function listWorkspaceUsers() {
@@ -202,12 +205,12 @@ export async function reserveWorkspaceTokens(keyId, tokens, model) {
   if (!key?.isActive || !key.userId) fail("Invalid API key", 401);
   const id = randomUUID(), now = new Date().toISOString(), period = now.slice(0, 7);
   db.transaction(() => {
-    const user = db.get("SELECT u.isActive, u.profileId, COALESCE(u.tokenLimit, p.tokenLimit) AS tokenLimit, COALESCE(u.dailyTokenLimit, p.dailyTokenLimit) AS dailyTokenLimit, p.maxConcurrent, p.quotaMode, p.sharedTokenLimit, p.sharedDailyTokenLimit FROM workspaceUsers u JOIN workspaceProfiles p ON p.id = u.profileId WHERE u.id = ?", [key.userId]);
+    const user = db.get("SELECT u.isActive, u.profileId, COALESCE(u.tokenLimit, p.tokenLimit) AS tokenLimit, COALESCE(u.dailyTokenLimit, p.dailyTokenLimit) AS dailyTokenLimit, p.maxConcurrent, p.quotaMode, p.usageOnly, p.sharedTokenLimit, p.sharedDailyTokenLimit FROM workspaceUsers u JOIN workspaceProfiles p ON p.id = u.profileId WHERE u.id = ?", [key.userId]);
     if (!user?.isActive) fail("User access is disabled", 403);
     // ponytail: one server instance; use a shared transactional DB before adding replicas.
     const pending = db.get("SELECT COUNT(*) AS n FROM workspaceRequests WHERE userId = ? AND status = 'reserved'", [key.userId]).n;
     if (pending >= user.maxConcurrent) fail("Concurrent request limit reached", 429);
-    if (user.dailyTokenLimit !== null) {
+    if (!user.usageOnly && user.dailyTokenLimit !== null) {
       const daily = dailyUsage(db, key.userId, now.slice(0, 10));
       if (daily.consumed + daily.reserved + tokens > user.dailyTokenLimit) fail("Daily token allowance exhausted or insufficient for this request", 429);
     }
@@ -215,7 +218,7 @@ export async function reserveWorkspaceTokens(keyId, tokens, model) {
     if (shared && shared.daily.remaining !== null && tokens > shared.daily.remaining) fail("Shared daily token allowance exhausted or insufficient for this request", 429);
     if (shared && shared.remaining !== null && tokens > shared.remaining) fail("Shared monthly token allowance exhausted or insufficient for this request", 429);
     db.run("INSERT OR IGNORE INTO workspacePeriods(userId, period) VALUES(?, ?)", [key.userId, period]);
-    const result = db.run("UPDATE workspacePeriods SET reserved = reserved + ? WHERE userId = ? AND period = ? AND consumed + reserved + ? <= ?", [tokens, key.userId, period, tokens, user.tokenLimit]);
+    const result = db.run("UPDATE workspacePeriods SET reserved = reserved + ? WHERE userId = ? AND period = ? AND (? = 1 OR consumed + reserved + ? <= ?)", [tokens, key.userId, period, user.usageOnly, tokens, user.tokenLimit]);
     if (!result.changes) fail("Monthly token allowance exhausted or insufficient for this request", 429);
     db.run("INSERT INTO workspaceRequests(id, userId, profileId, keyId, period, model, reservedTokens, status, createdAt) VALUES(?, ?, ?, ?, ?, ?, ?, 'reserved', ?)", [id, key.userId, user.profileId, keyId, period, model, tokens, now]);
   });
