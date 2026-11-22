@@ -46,6 +46,116 @@ test("validation rejects weak passwords, invalid budgets and duplicate emails", 
   }
 });
 
+test("members change only their password, invalidate every old session and preserve keys and usage", async () => {
+  const { createDashboardAuthToken, getDashboardAuthSession } = await import("@/lib/auth/dashboardSession.js");
+  const { validateApiKey } = await import("@/lib/db/repos/apiKeysRepo.js");
+  const claims = { role: "member", userId: user.id, authVersion: user.authVersion };
+  const sessions = await Promise.all([createDashboardAuthToken(claims), createDashboardAuthToken({ ...claims, device: "other" })]);
+  const owner = await createDashboardAuthToken();
+  const held = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await w.settleWorkspaceTokens(held.id, 30);
+  const budget = await w.getUserBudget(user.id);
+  await w.changeWorkspacePassword(user.id, "test-password-123", "new-password-456", user.authVersion);
+  expect(await w.authenticateWorkspaceUser(user.email, "test-password-123")).toBeNull();
+  expect((await w.authenticateWorkspaceUser(user.email, "new-password-456")).id).toBe(user.id);
+  for (const token of sessions) expect(await getDashboardAuthSession(token)).toBeNull();
+  expect((await getDashboardAuthSession(owner)).role).toBe("admin");
+  expect(await validateApiKey(key.key)).toBe(true);
+  expect(await w.getUserBudget(user.id)).toEqual(budget);
+  expect(await w.getWorkspaceUser(user.id)).toEqual({ ...user, authVersion: user.authVersion + 1 });
+  const events = db.all("SELECT actor, action, subjectId, details FROM workspaceAudit WHERE action = 'user.password.changed'");
+  expect(events).toEqual([{ actor: `member:${user.id}`, action: "user.password.changed", subjectId: user.id, details: "{}" }]);
+});
+
+test("invalid, identical, oversized and stale password changes leave credentials untouched", async () => {
+  for (const [current, next, version, status] of [
+    ["wrong-password-123", "new-password-456", user.authVersion, 401],
+    [null, "new-password-456", user.authVersion, 400],
+    ["a".repeat(73), "new-password-456", user.authVersion, 400],
+    ["test-password-123", "short", user.authVersion, 400],
+    ["test-password-123", "a".repeat(73), user.authVersion, 400],
+    ["test-password-123", "ژ".repeat(37), user.authVersion, 400],
+    ["test-password-123", "test-password-123", user.authVersion, 400],
+    ["test-password-123", "new-password-456", user.authVersion + 1, 401],
+  ]) await expect(w.changeWorkspacePassword(user.id, current, next, version)).rejects.toMatchObject({ status });
+  expect((await w.authenticateWorkspaceUser(user.email, "test-password-123")).authVersion).toBe(user.authVersion);
+  expect(db.get("SELECT COUNT(*) AS n FROM workspaceAudit WHERE action = 'user.password.changed'").n).toBe(0);
+});
+
+test("concurrent password changes accept one winner without overwriting it", async () => {
+  const results = await Promise.allSettled(["new-password-one", "new-password-two"].map(next => w.changeWorkspacePassword(user.id, "test-password-123", next, user.authVersion)));
+  expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+  expect(results.find(result => result.status === "rejected").reason.status).toBe(409);
+  const winner = results[0].status === "fulfilled" ? "new-password-one" : "new-password-two";
+  expect((await w.authenticateWorkspaceUser(user.email, winner)).authVersion).toBe(user.authVersion + 1);
+  expect(db.get("SELECT COUNT(*) AS n FROM workspaceAudit WHERE action = 'user.password.changed'").n).toBe(1);
+});
+
+test.each(["pause", "reset"])("a concurrent owner %s prevents an in-flight member password change", async action => {
+  const { default: bcrypt } = await import("bcryptjs");
+  const compare = bcrypt.compare;
+  let resume, started;
+  const gate = new Promise(resolve => { resume = resolve; });
+  const entered = new Promise(resolve => { started = resolve; });
+  const spy = vi.spyOn(bcrypt, "compare").mockImplementationOnce(async (...args) => { started(); await gate; return compare(...args); });
+  const pending = w.changeWorkspacePassword(user.id, "test-password-123", "member-password-456", user.authVersion);
+  try {
+    await entered;
+    await w.updateWorkspaceUser(user.id, action === "pause" ? { isActive: false } : { password: "owner-reset-password" });
+    resume();
+    await expect(pending).rejects.toMatchObject({ status: 409 });
+    await expect(w.changeWorkspacePassword(user.id, "test-password-123", "other-password-456", user.authVersion)).rejects.toMatchObject({ status: 401 });
+    if (action === "reset") expect((await w.authenticateWorkspaceUser(user.email, "owner-reset-password")).id).toBe(user.id);
+    else expect((await w.getWorkspaceUser(user.id)).isActive).toBe(false);
+  } finally { resume(); spy.mockRestore(); }
+});
+
+test("password endpoint enforces member ownership, CSRF, confirmation and cookie isolation", async () => {
+  const removed = [];
+  vi.doMock("next/headers", () => ({ cookies: async () => ({ delete: name => removed.push(name) }) }));
+  try {
+    const { POST } = await import("@/app/api/workspace/password/route.js");
+    const { createDashboardAuthToken } = await import("@/lib/auth/dashboardSession.js");
+    const member = await createDashboardAuthToken({ role: "member", userId: user.id, authVersion: user.authVersion });
+    const owner = await createDashboardAuthToken();
+    const body = { currentPassword: "test-password-123", newPassword: "new-password-456", confirmPassword: "new-password-456" };
+    const send = (input, token = member, headers = {}) => POST(new Request("http://localhost/api/workspace/password", { method: "POST", headers: { "content-type": "application/json", cookie: `tokyard_auth_token=${token}`, ...headers }, body: JSON.stringify(input) }));
+    expect((await send(body, "")).status).toBe(401);
+    expect((await send(body, owner)).status).toBe(403);
+    expect((await send(body, member, { origin: "https://evil.example" })).status).toBe(403);
+    expect((await send(body, member, { "sec-fetch-site": "cross-site" })).status).toBe(403);
+    expect((await send({ ...body, userId: "someone-else" })).status).toBe(400);
+    expect((await send({ ...body, profileId: "standard" })).status).toBe(400);
+    expect((await send({ ...body, confirmPassword: "different-password" })).status).toBe(400);
+    const response = await send(body);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(removed).toEqual(["tokyard_auth_token"]);
+    expect((await send(body)).status).toBe(401);
+  } finally { vi.doUnmock("next/headers"); }
+});
+
+test("password guessing is bounded even in parallel and cannot reset a login lock", async () => {
+  vi.doMock("next/headers", () => ({ cookies: async () => ({ delete() {} }) }));
+  try {
+    const { POST } = await import("@/app/api/workspace/password/route.js");
+    const { createDashboardAuthToken } = await import("@/lib/auth/dashboardSession.js");
+    const { recordFail, checkLock } = await import("@/lib/auth/loginLimiter.js");
+    const member = await createDashboardAuthToken({ role: "member", userId: user.id, authVersion: user.authVersion });
+    const send = currentPassword => POST(new Request("http://localhost/api/workspace/password", { method: "POST", headers: { "content-type": "application/json", cookie: `tokyard_auth_token=${member}` }, body: JSON.stringify({ currentPassword, newPassword: "new-password-456", confirmPassword: "new-password-456" }) }));
+    for (let i = 0; i < 5; i++) recordFail("owner-login-test");
+    const responses = await Promise.all(Array.from({ length: 8 }, () => send("wrong-password-123")));
+    expect(responses.filter(response => response.status === 401)).toHaveLength(5);
+    expect(responses.filter(response => response.status === 429)).toHaveLength(3);
+    const locked = await send("test-password-123");
+    expect(locked.status).toBe(429);
+    expect(Number(locked.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(checkLock("owner-login-test").locked).toBe(true);
+    expect((await w.authenticateWorkspaceUser(user.email, "test-password-123")).authVersion).toBe(user.authVersion);
+  } finally { vi.doUnmock("next/headers"); }
+});
+
 test("usage-only profiles ignore all token budgets and personal overrides without losing attribution", async () => {
   expect((await w.listProfiles())[0].usageOnly).toBe(false);
   for (const usageOnly of [null, 1, "true"]) await expect(w.saveProfile({ usageOnly }, "standard")).rejects.toThrow("boolean");

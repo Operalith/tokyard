@@ -127,6 +127,22 @@ export async function updateWorkspaceUser(id, input, actor = "owner") {
   return getWorkspaceUser(id);
 }
 
+export async function changeWorkspacePassword(id, currentPassword, newPassword, authVersion) {
+  if (typeof currentPassword !== "string" || !currentPassword || Buffer.byteLength(currentPassword) > 72) fail("Enter your current password", 400);
+  const nextPassword = password(newPassword);
+  if (nextPassword === currentPassword) fail("New password must differ from the current password");
+  const db = await getAdapter();
+  const user = db.get("SELECT passwordHash, authVersion, isActive FROM workspaceUsers WHERE id = ?", [id]);
+  if (!user?.isActive || user.authVersion !== authVersion) fail("Sign in to continue", 401);
+  if (!await bcrypt.compare(currentPassword, user.passwordHash)) fail("Current password is incorrect", 401);
+  const hash = await bcrypt.hash(nextPassword, 12);
+  db.transaction(() => {
+    const result = db.run("UPDATE workspaceUsers SET passwordHash = ?, authVersion = authVersion + 1 WHERE id = ? AND passwordHash = ? AND authVersion = ? AND isActive = 1", [hash, id, user.passwordHash, authVersion]);
+    if (!result.changes) fail("Your account changed. Sign in again before changing your password.", 409);
+    audit(db, `member:${id}`, "user.password.changed", id);
+  });
+}
+
 const dummyPasswordHash = bcrypt.hashSync("tokyard-dummy-password-never-used", 12);
 export async function authenticateWorkspaceUser(email, secret) {
   if (typeof email !== "string" || typeof secret !== "string" || email.length > 254 || Buffer.byteLength(secret) > 72) return null;

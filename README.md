@@ -6,13 +6,14 @@ TokYard is a self-hosted AI gateway for small teams. Connect provider accounts o
 
 An independent MIT-licensed fork of [9router](https://github.com/decolua/9router), maintained by [Operalith](https://github.com/Operalith).
 
-> **0.1.0-alpha.2:** working user management and token accounting, with a new Workspace interface. Use one server process and a persistent local SQLite database. This is not a production billing platform or a claim of support for every inherited provider.
+> **0.1.0-alpha.3:** working user management and token accounting, with a new Workspace interface. Use one server process and a persistent local SQLite database. This is not a production billing platform or a claim of support for every inherited provider.
 
 ![TokYard Workspace with local test data](docs/tokyard/workspace.png)
 
 ## What works
 
 - Owner and member sign-in, with separate permissions.
+- Members can change their own password after verifying the current password; all their dashboard sessions are invalidated while API keys remain active.
 - Profiles with monthly allowances, optional daily caps, model allowlists, concurrency limits and output caps.
 - Usage-only profiles that track each person's tokens without daily, monthly or shared token budgets.
 - Individual allowance overrides, immediate pause/resume and password resets by the owner.
@@ -77,6 +78,8 @@ curl http://localhost:20120/v1/chat/completions \
 ```
 
 Use a model you connected and allowed. The example does not provision an OpenAI account or make a paid call during installation.
+
+Members can open **My workspace → Change password**, enter their current password and confirm a new password of at least 12 characters (at most 72 UTF-8 bytes). A successful change signs that member out on all devices and returns them to the Member sign-in form. API keys, token usage and profile settings are preserved. Failed attempts are rate-limited separately from owner/member sign-in. Forgotten passwords still require an owner reset through **People & quotas → Edit access**.
 
 ## How allowances work
 
