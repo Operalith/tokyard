@@ -34,6 +34,99 @@ test("secrets stay hashed; a stored hash cannot authenticate as a bearer key", a
   expect((await w.authenticateWorkspaceUser("MEMBER@example.com", "test-password-123")).id).toBe(user.id);
 });
 
+test("new keys can be revealed after restart but lists, database and audit never expose plaintext", async () => {
+  const stored = db.get("SELECT key, encryptedKey FROM apiKeys WHERE id = ?", [key.id]);
+  expect(stored.encryptedKey).toMatch(/^v1:/);
+  expect(JSON.stringify(stored)).not.toContain(key.key);
+  expect((await w.listWorkspaceKeys(user.id))[0]).toMatchObject({ id: key.id, canReveal: true });
+  expect(JSON.stringify(await w.listWorkspaceKeys(user.id))).not.toContain(stored.encryptedKey);
+  const file = path.join(dir, "workspace-key-encryption.key");
+  expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  db.close(); delete global._dbAdapter; vi.resetModules();
+  w = await import("@/lib/workspace.js"); db = await w.ensureWorkspace();
+  expect(await w.revealWorkspaceKey(user.id, key.id, user.id)).toEqual({ id: key.id, key: key.key });
+  const events = db.all("SELECT actor, action, subjectId, details FROM workspaceAudit WHERE action = 'key.revealed'");
+  expect(events).toEqual([{ actor: user.id, action: "key.revealed", subjectId: key.id, details: JSON.stringify({ userId: user.id }) }]);
+  const audit = JSON.stringify(db.all("SELECT * FROM workspaceAudit"));
+  for (const secret of [key.key, stored.key, stored.encryptedKey]) expect(audit).not.toContain(secret);
+});
+
+test("encrypted keys are bound to their owner and ID and reject modified ciphertext", async () => {
+  const second = await w.createWorkspaceKey(user.id, "Second");
+  const original = db.get("SELECT encryptedKey FROM apiKeys WHERE id = ?", [key.id]).encryptedKey;
+  const { openWorkspaceKey } = await import("@/lib/workspaceKeySecret.js");
+  expect(() => openWorkspaceKey(original, `another-member:${key.id}`)).toThrow();
+  const swapped = db.get("SELECT encryptedKey FROM apiKeys WHERE id = ?", [second.id]).encryptedKey;
+  db.run("UPDATE apiKeys SET encryptedKey = ? WHERE id = ?", [swapped, key.id]);
+  await expect(w.revealWorkspaceKey(user.id, key.id, "owner")).rejects.toMatchObject({ status: 503 });
+  const bytes = Buffer.from(original.slice(3), "base64url"); bytes[bytes.length - 1] ^= 1;
+  db.run("UPDATE apiKeys SET encryptedKey = ? WHERE id = ?", [`v1:${bytes.toString("base64url")}`, key.id]);
+  await expect(w.revealWorkspaceKey(user.id, key.id, "owner")).rejects.toMatchObject({ status: 503 });
+  expect(db.get("SELECT COUNT(*) AS n FROM workspaceAudit WHERE action = 'key.revealed'").n).toBe(0);
+});
+
+test("missing encryption material never gets silently replaced and API authentication still works", async () => {
+  const { validateApiKey } = await import("@/lib/db/repos/apiKeysRepo.js");
+  const file = path.join(dir, "workspace-key-encryption.key"), material = fs.readFileSync(file);
+  const legacy = await w.createWorkspaceKey(user.id, "Older client");
+  db.run("UPDATE apiKeys SET encryptedKey = NULL WHERE id = ?", [legacy.id]);
+  fs.unlinkSync(file);
+  await expect(w.revealWorkspaceKey(user.id, key.id, "owner")).rejects.toMatchObject({ status: 503 });
+  await expect(w.createWorkspaceKey(user.id, "Must not replace master key")).rejects.toMatchObject({ status: 503 });
+  expect(fs.existsSync(file)).toBe(false);
+  expect(await validateApiKey(key.key)).toBe(true);
+  expect(await validateApiKey(legacy.key)).toBe(true);
+  expect((await w.listWorkspaceKeys(user.id)).find(item => item.id === legacy.id).canReveal).toBe(false);
+  fs.writeFileSync(file, material, { mode: 0o600 });
+  expect((await w.revealWorkspaceKey(user.id, key.id, "owner")).key).toBe(key.key);
+  await w.revokeWorkspaceKey(user.id, key.id);
+  await expect(w.revealWorkspaceKey(user.id, key.id, "owner")).rejects.toMatchObject({ status: 404 });
+});
+
+test("key reveal endpoint requires owner or owning member and rejects cross-origin requests", async () => {
+  const { POST } = await import("@/app/api/workspace/keys/[id]/route.js");
+  const { createDashboardAuthToken } = await import("@/lib/auth/dashboardSession.js");
+  const other = await w.createWorkspaceUser({ name: "Other", email: "other-key@example.test", password: "test-password-123" });
+  const member = await createDashboardAuthToken({ role: "member", userId: user.id, authVersion: user.authVersion });
+  const peer = await createDashboardAuthToken({ role: "member", userId: other.id, authVersion: other.authVersion });
+  const owner = await createDashboardAuthToken();
+  const reveal = (token, headers = {}) => POST(new Request(`http://localhost/api/workspace/keys/${key.id}`, { method: "POST", headers: { cookie: `tokyard_auth_token=${token}`, ...headers } }), { params: Promise.resolve({ id: key.id }) });
+  expect((await reveal("")).status).toBe(401);
+  expect((await reveal(peer)).status).toBe(404);
+  expect((await reveal(member, { origin: "https://evil.example" })).status).toBe(403);
+  for (const token of [owner, member]) {
+    const response = await reveal(token);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(await response.json()).toEqual({ id: key.id, key: key.key });
+  }
+  await w.updateWorkspaceUser(user.id, { isActive: false });
+  expect((await reveal(member)).status).toBe(401);
+});
+
+test("schema 7 upgrade preserves hash-only keys and their usage without inventing a secret", async () => {
+  const held = await w.reserveWorkspaceTokens(key.id, 100, "openai/test");
+  await w.settleWorkspaceTokens(held.id, 30, "provider", null, null, { inputTokens: 20, outputTokens: 10 });
+  const budget = await w.getUserBudget(user.id);
+  db.exec("ALTER TABLE apiKeys DROP COLUMN encryptedKey");
+  fs.unlinkSync(path.join(dir, "workspace-key-encryption.key"));
+  db.run("UPDATE _meta SET value = '7' WHERE key = 'backupSchemaVersion'");
+  db.run("UPDATE _meta SET value = '4' WHERE key = 'schemaVersion'");
+  db.close(); delete global._dbAdapter; vi.resetModules();
+  w = await import("@/lib/workspace.js"); db = await w.ensureWorkspace();
+  const { validateApiKey } = await import("@/lib/db/repos/apiKeysRepo.js");
+  expect(await w.getUserBudget(user.id)).toEqual(budget);
+  expect((await w.listWorkspaceKeys(user.id))[0].canReveal).toBe(false);
+  await expect(w.revealWorkspaceKey(user.id, key.id, "owner")).rejects.toMatchObject({ status: 409 });
+  expect(await validateApiKey(key.key)).toBe(true);
+  expect((await w.listWorkspaceKeys(user.id))[0].canReveal).toBe(true);
+  expect((await w.revealWorkspaceKey(user.id, key.id, "owner")).key).toBe(key.key);
+  const added = await w.createWorkspaceKey(user.id, "Repeat viewing");
+  expect((await w.revealWorkspaceKey(user.id, added.id, "owner")).key).toBe(added.key);
+  expect(await validateApiKey(key.key)).toBe(true);
+  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-7-to-8-"))).toBe(true);
+});
+
 test("validation rejects weak passwords, invalid budgets and duplicate emails", async () => {
   await expect(w.createWorkspaceUser({ name: "X", email: "x@example.com", password: "123" })).rejects.toThrow("Password");
   await expect(w.createWorkspaceUser({ name: "X", email: user.email.toUpperCase(), password: "test-password-123" })).rejects.toThrow("Email already exists");
@@ -231,7 +324,7 @@ test("schema 6 upgrade preserves old totals as unclassified and keeps keys and h
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 80, reserved: 50, inputTokens: 0, outputTokens: 0, unclassifiedTokens: 80, daily: { consumed: 80, unclassifiedTokens: 80 } });
   expect(db.get("SELECT inputTokens, outputTokens FROM workspaceRequests WHERE id = ?", [settled.id])).toEqual({ inputTokens: null, outputTokens: null });
   expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
-  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-6-to-7-"))).toBe(true);
+  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-6-to-8-"))).toBe(true);
 });
 
 test("schema 5 upgrade preserves existing quotas, keys, consumption and held usage", async () => {
@@ -246,7 +339,7 @@ test("schema 5 upgrade preserves existing quotas, keys, consumption and held usa
   expect((await w.listProfiles())[0]).toMatchObject({ usageOnly: false, tokenLimit: 1000000 });
   expect(await w.getUserBudget(user.id)).toMatchObject({ limit: 1000000, consumed: 80, reserved: 50 });
   expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
-  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-5-to-7-"))).toBe(true);
+  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-5-to-8-"))).toBe(true);
 });
 
 test("daily allowance is atomic across keys and providers; monthly cap still applies", async () => {
@@ -319,7 +412,7 @@ test("schema 3 upgrade preserves keys, monthly counters and today's settled and 
   w = await import("@/lib/workspace.js");
   db = await w.ensureWorkspace();
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 80, reserved: 50, daily: { limit: null, consumed: 80, reserved: 50 } });
-  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("7");
+  expect(db.get("SELECT value FROM _meta WHERE key = 'backupSchemaVersion'").value).toBe("8");
   expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [key.id]).key).toBe(w.hashWorkspaceKey(key.key));
   await w.saveProfile({ dailyTokenLimit: 130 }, "standard");
   await expect(w.reserveWorkspaceTokens(key.id, 1, "openai/test")).rejects.toThrow("Daily");

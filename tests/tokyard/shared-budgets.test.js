@@ -123,7 +123,7 @@ test("schema 4 upgrade preserves counters, keys and held rows, assigning old row
   expect(await w.getUserBudget(second.id)).toMatchObject({ consumed: 0, reserved: 50 });
   expect(db.get("SELECT key FROM apiKeys WHERE id = ?", [firstKey.id]).key).toBe(w.hashWorkspaceKey(firstKey.key));
   expect(db.all("SELECT DISTINCT profileId FROM workspaceRequests").map(row => row.profileId)).toEqual(["standard"]);
-  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-4-to-7-"))).toBe(true);
+  expect(fs.readdirSync(path.join(dir, "db/backups")).some(name => name.startsWith("schema-4-to-8-"))).toBe(true);
   await w.saveProfile({ quotaMode: "shared", sharedTokenLimit: 130 }, "standard");
   await expect(w.reserveWorkspaceTokens(firstKey.id, 1, "openai/test")).rejects.toThrow("Shared monthly");
 });

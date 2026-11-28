@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { getAdapter } from "./db/driver.js";
+import { sealWorkspaceKey, openWorkspaceKey } from "./workspaceKeySecret.js";
 
 export class WorkspaceError extends Error {
   constructor(message, status = 400) { super(message); this.status = status; }
@@ -197,8 +198,11 @@ export async function createWorkspaceKey(userId, name, actor = "owner") {
   if (db.get("SELECT COUNT(*) AS n FROM apiKeys WHERE userId = ? AND isActive = 1", [userId]).n >= 20) fail("Revoke an existing key before creating another", 409);
   const key = `ty_${randomBytes(32).toString("base64url")}`;
   const id = randomUUID(), prefix = `${key.slice(0, 10)}…${key.slice(-4)}`;
+  let encryptedKey;
+  try { encryptedKey = sealWorkspaceKey(key, `${userId}:${id}`, !db.get("SELECT id FROM apiKeys WHERE encryptedKey IS NOT NULL LIMIT 1")); }
+  catch { fail("Key encryption is unavailable. Preserve or restore DATA_DIR/workspace-key-encryption.key before creating keys.", 503); }
   db.transaction(() => {
-    db.run("INSERT INTO apiKeys(id, key, name, machineId, isActive, createdAt, accessRestricted, accessAllow, userId, prefix) VALUES(?, ?, ?, 'tokyard', 1, ?, 0, '[]', ?, ?)", [id, hashWorkspaceKey(key), label, new Date().toISOString(), userId, prefix]);
+    db.run("INSERT INTO apiKeys(id, key, encryptedKey, name, machineId, isActive, createdAt, accessRestricted, accessAllow, userId, prefix) VALUES(?, ?, ?, ?, 'tokyard', 1, ?, 0, '[]', ?, ?)", [id, hashWorkspaceKey(key), encryptedKey, label, new Date().toISOString(), userId, prefix]);
     audit(db, actor, "key.created", id, { userId, name: label, prefix });
   });
   return { id, name: label, prefix, key };
@@ -206,7 +210,21 @@ export async function createWorkspaceKey(userId, name, actor = "owner") {
 
 export async function listWorkspaceKeys(userId) {
   const db = await getAdapter();
-  return db.all("SELECT id, name, prefix, isActive, createdAt FROM apiKeys WHERE userId = ? ORDER BY createdAt DESC", [userId]).map(k => ({ ...k, isActive: !!k.isActive }));
+  return db.all("SELECT id, name, prefix, isActive, createdAt, encryptedKey IS NOT NULL AS canReveal FROM apiKeys WHERE userId = ? ORDER BY createdAt DESC", [userId]).map(k => ({ ...k, isActive: !!k.isActive, canReveal: !!k.canReveal }));
+}
+
+export async function revealWorkspaceKey(userId, id, actor) {
+  const db = await getAdapter();
+  const row = db.get("SELECT key, encryptedKey, isActive FROM apiKeys WHERE id = ? AND userId = ?", [id, userId]);
+  if (!row?.isActive) fail("Key not found", 404);
+  if (!row.encryptedKey) fail("Use this older key once in a client to enable viewing, or create a new key. Its hash alone cannot be recovered.", 409);
+  let key;
+  try {
+    key = openWorkspaceKey(row.encryptedKey, `${userId}:${id}`);
+    if (hashWorkspaceKey(key) !== row.key) throw new Error("Key mismatch");
+  } catch { fail("Stored key cannot be opened. Restore DATA_DIR/workspace-key-encryption.key from its backup.", 503); }
+  audit(db, actor, "key.revealed", id, { userId });
+  return { id, key };
 }
 
 export async function revokeWorkspaceKey(userId, id, actor = "owner") {

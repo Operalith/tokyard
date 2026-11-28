@@ -6,7 +6,7 @@ TokYard is a self-hosted AI gateway for small teams. Connect provider accounts o
 
 An independent MIT-licensed fork of [9router](https://github.com/decolua/9router), maintained by [Operalith](https://github.com/Operalith).
 
-> **0.1.0-alpha.4:** working user management and token accounting, with a new Workspace interface. Use one server process and a persistent local SQLite database. This is not a production billing platform or a claim of support for every inherited provider.
+> **0.1.0-alpha.5:** working user management and token accounting, with a new Workspace interface. Use one server process and a persistent local SQLite database. This is not a production billing platform or a claim of support for every inherited provider.
 
 ![TokYard Workspace with local test data](docs/tokyard/workspace.png)
 
@@ -17,7 +17,7 @@ An independent MIT-licensed fork of [9router](https://github.com/decolua/9router
 - Profiles with monthly allowances, optional daily caps, model allowlists, concurrency limits and output caps.
 - Usage-only profiles that track each person's tokens without daily, monthly or shared token budgets.
 - Individual allowance overrides, immediate pause/resume and password resets by the owner.
-- Multiple API keys per person, sharing one allowance. Member secrets are shown once and stored as SHA-256 hashes.
+- Multiple API keys per person, sharing one allowance. Member API-key authentication uses SHA-256 hashes; new keys also have an encrypted copy for repeat viewing by the member or workspace owner.
 - Reservations before upstream calls, automatic settlement from provider-reported usage, and a request ledger.
 - Held budgets for interrupted or unverifiable requests, with audited owner reconciliation.
 - Responsive Workspace dashboard, light/dark themes and a personal member view.
@@ -44,7 +44,7 @@ npm run build
 npm start
 ```
 
-Open [http://localhost:20120](http://localhost:20120), choose **Workspace owner**, and sign in with `INITIAL_PASSWORD`. There is no built-in default password. A random signing key is generated in `DATA_DIR/jwt-secret` if `JWT_SECRET` is empty. Preserve it with your data.
+Open [http://localhost:20120](http://localhost:20120), choose **Workspace owner**, and sign in with `INITIAL_PASSWORD`. There is no built-in default password. A random signing key is generated in `DATA_DIR/jwt-secret` if `JWT_SECRET` is empty. Preserve it with your data. New member keys use a separate encryption key at `DATA_DIR/workspace-key-encryption.key`; back up the entire DATA_DIR, not only the SQLite file. Losing this file prevents revealing encrypted keys, while existing API-key authentication still works.
 
 `DATA_DIR` defaults to `~/.tokyard` (`%APPDATA%/tokyard` on Windows). The sample `.env` uses `./.tokyard`. TokYard does not automatically read an existing 9router data directory. Do not point two running gateways at the same directory.
 
@@ -78,6 +78,8 @@ curl http://localhost:20120/v1/chat/completions \
 ```
 
 Use a model you connected and allowed. The example does not provision an OpenAI account or make a paid call during installation.
+
+Under **API keys**, use **Show / copy** to reopen an active key after closing the dialog or signing in again. The key remains hidden in normal list responses. New secrets use AES-256-GCM authenticated encryption, bound to their member and key IDs; reveal requires an owner or that member's active dashboard session and is audited without the secret. Copy supports the Clipboard API and a browser selection fallback. If both are blocked, the dialog keeps the full key selectable and shows a manual-copy message. Older keys stored only as hashes cannot be reconstructed from the database. A valid use of an active older key automatically saves its encrypted copy for future viewing, without changing the key or its clients. If the original key has been lost and no client still uses it, create a new key, update clients, then revoke the old one when ready. Upgrading does not revoke or replace existing keys.
 
 Members can open **My workspace → Change password**, enter their current password and confirm a new password of at least 12 characters (at most 72 UTF-8 bytes). A successful change signs that member out on all devices and returns them to the Member sign-in form. API keys, token usage and profile settings are preserved. Failed attempts are rate-limited separately from owner/member sign-in. Forgotten passwords still require an owner reset through **People & quotas → Edit access**.
 

@@ -94,6 +94,7 @@ graphify-out/*
 
 # Local sensitive / temp files
 .engine-token.txt
+workspace-key-encryption.key
 .tmp-prov.json
 .tmp-providers.json
 .oauth-session.json
