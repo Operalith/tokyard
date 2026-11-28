@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-alpha.5 — 2026-11-28
+
+- Fix key copying when the Clipboard API is unavailable or denied. Use a dialog-safe selection fallback and report success only after copying succeeds; keep manual-copy errors visible inside the key dialog.
+- Let members and owners reopen active new keys with Show / copy. Store an AES-256-GCM encrypted copy alongside the authentication hash and audit reveals without logging secrets.
+- Add schema 8 / migration 5 for nullable encrypted key storage. Existing hash-only keys remain valid and gain encrypted storage on their next valid use; lost unused keys need replacement.
+- Preserve the separate DATA_DIR/workspace-key-encryption.key file with the database when backing up or moving an installation.
+
 ## 0.1.0-alpha.4 — 2026-11-22
 
 - Remove the fixed 32,768-token profile output ceiling; Fixed and Shared profiles accept larger output caps, subject to the model/provider capacity and available allowance.

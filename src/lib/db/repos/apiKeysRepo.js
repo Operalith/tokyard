@@ -3,6 +3,7 @@ import { getAdapter } from "../driver.js";
 import { keyAccessFromColumns, keyAccessToColumns } from "@/shared/utils/keyAccess.js";
 import { KEY_ACCESS_UNRESTRICTED } from "@/shared/constants/keyAccess.js";
 import { hashWorkspaceKey, getWorkspaceUser } from "@/lib/workspace.js";
+import { sealWorkspaceKey } from "@/lib/workspaceKeySecret.js";
 
 function rowToKey(row) {
   if (!row) return null;
@@ -42,6 +43,13 @@ export async function getApiKeyByKey(key) {
     const user = await getWorkspaceUser(record.userId);
     record.isActive = record.isActive && !!user?.isActive;
     record.access = { restricted: !!user?.allowedModels.length, allow: user?.allowedModels || [] };
+    if (record.isActive && !row.encryptedKey) {
+      // A valid legacy bearer supplies the original secret; hashes alone cannot.
+      try {
+        const encrypted = sealWorkspaceKey(key, `${record.userId}:${record.id}`, !db.get("SELECT id FROM apiKeys WHERE encryptedKey IS NOT NULL LIMIT 1"));
+        db.run("UPDATE apiKeys SET encryptedKey = ? WHERE id = ? AND key = ? AND encryptedKey IS NULL AND isActive = 1", [encrypted, record.id, row.key]);
+      } catch { /* Encryption storage failure must not disable a valid legacy key. */ }
+    }
   }
   return record;
 }
