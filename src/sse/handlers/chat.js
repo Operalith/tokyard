@@ -29,6 +29,7 @@ import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
 import { getKeyAccessContext, enforceKeyAccess, filterAdapterModels } from "../services/keyAccess.js";
 import { resolveSmartChoice } from "../services/systemoneRouter.js";
 import { meterWorkspaceChat } from "@/lib/workspaceMetering.js";
+import { dispatchMeteredVision } from "./meteredVision.js";
 
 /**
  * Handle chat completion request
@@ -46,6 +47,19 @@ async function handleChatRequest(request, clientRawRequest = null) {
   } catch {
     log.warn("CHAT", "Invalid JSON body");
     return errorResponse(HTTP_STATUS.BAD_REQUEST, "Invalid JSON body");
+  }
+
+  if (request.tokyardMeter?.vision) {
+    const meter = request.tokyardMeter;
+    const modelInfo = await getModelInfo(body.model);
+    const denied = await enforceKeyAccess(await getKeyAccessContext(request), body.model);
+    if (denied) return denied;
+    if (new URL(request.url).pathname !== "/v1/chat/completions" && new URL(request.url).pathname !== "/api/v1/chat/completions") return errorResponse(403, "Unsupported metered vision endpoint");
+    if (modelInfo?.provider !== "openai" || modelInfo.model !== meter.vision.model || await getComboModels(body.model)) return errorResponse(403, "Metered vision requires the direct OpenAI model");
+    const settings = await getSettings();
+    if (settings.outboundProxyEnabled || settings.providerOverrides?.openai) return errorResponse(403, "Proxies and OpenAI overrides are incompatible with metered vision");
+    const credentials = await getProviderCredentials("openai", null, meter.vision.model, { requestedModel: meter.vision.model });
+    return dispatchMeteredVision({ body, meter, credentials, signal: request.signal });
   }
 
   // Build clientRawRequest for logging (if not provided)

@@ -3,16 +3,40 @@ import { getWorkspaceUser, getUserBudget, reserveWorkspaceTokens, settleWorkspac
 import { extractClientApiKey, getKeyAccessContext, enforceKeyAccess } from "@/sse/services/keyAccess.js";
 import { getModelInfo, getComboModels } from "@/sse/services/model.js";
 import { canonicalizeUsage } from "open-sse/utils/usageTracking.js";
+import { LOW_DETAIL_TOKENS, validateVision } from "./workspaceVision.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const INPUT_OVERHEAD_TOKENS = 2048;
 const UNSUPPORTED_CONTENT = new Set(["image_url", "input_image", "image", "input_audio", "audio", "video", "document", "file", "input_file"]);
 
-function hasUnsupportedContent(value, depth = 0) {
-  if (!value || typeof value !== "object") return false;
+async function readBounded(request) {
+  const limit = 7 * MAX_BODY_BYTES;
+  const encoding = request.headers.get("content-encoding");
+  if (encoding && encoding.toLowerCase() !== "identity") throw new WorkspaceError("Unsupported content encoding", 415);
+  const length = request.headers.get("content-length");
+  if (length !== null && (!/^\d+$/.test(length) || Number(length) > limit)) throw new WorkspaceError("Request exceeds 7 MiB", 413);
+  if (!request.body) return "";
+  const reader = request.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) { void reader.cancel().catch(() => {}); throw new WorkspaceError("Request exceeds 7 MiB", 413); }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks, size)); }
+  catch { throw new WorkspaceError("Invalid UTF-8"); }
+}
+
+function hasUnsupportedContent(value, depth = 0, allowedImage = null) {
+  if (!value || typeof value !== "object" || value === allowedImage) return false;
   if (depth > 32) throw new WorkspaceError("Request nesting exceeds 32 levels");
   if (UNSUPPORTED_CONTENT.has(value.type)) return true;
-  return Object.values(value).some(v => typeof v === "object" && hasUnsupportedContent(v, depth + 1));
+  return Object.values(value).some(v => typeof v === "object" && hasUnsupportedContent(v, depth + 1, allowedImage));
 }
 
 export async function meterWorkspaceChat(request, dispatch) {
@@ -23,25 +47,39 @@ export async function meterWorkspaceChat(request, dispatch) {
     const key = await getApiKeyByKey(presented);
     if (!key?.isActive || !key.userId) throw new WorkspaceError("Invalid API key", 401);
     const user = await getWorkspaceUser(key.userId);
-    const raw = await request.clone().text();
-    if (Buffer.byteLength(raw) > MAX_BODY_BYTES) throw new WorkspaceError("Text request exceeds 1 MiB", 413);
+    const raw = await readBounded(request);
     let body;
     try { body = JSON.parse(raw); } catch { throw new WorkspaceError("Invalid JSON"); }
     if (!body || typeof body !== "object" || Array.isArray(body) || typeof body.model !== "string" || !body.model || body.model.length > 256) throw new WorkspaceError("A valid model is required");
-    if (hasUnsupportedContent(body) || body.audio || body.video || body.image || (body.modalities && (!Array.isArray(body.modalities) || body.modalities.some(m => m !== "text")))) throw new WorkspaceError("Metered keys currently support text requests only", 403);
+    const unsupported = hasUnsupportedContent(body) || body.audio || body.video || body.image || (body.modalities && (!Array.isArray(body.modalities) || body.modalities.some(m => m !== "text")));
     if (body.n !== undefined && body.n !== 1) throw new WorkspaceError("Metered requests require n = 1");
     if (body.tools !== undefined && (!Array.isArray(body.tools) || body.tools.some(t => !t || typeof t !== "object" || (t.type && t.type !== "function") || (!t.type && typeof t.name !== "string")))) throw new WorkspaceError("Only function tools are supported for metered keys", 403);
     if (body.stream !== undefined && typeof body.stream !== "boolean") throw new WorkspaceError("stream must be a boolean");
     if (body.previous_response_id || body.conversation || body.background) throw new WorkspaceError("Metered requests require explicit text history and synchronous execution", 403);
     const info = await getModelInfo(body.model);
     if (!info?.provider || info.provider === "systemone" || await getComboModels(body.model)) throw new WorkspaceError("Use a direct text model with metered keys; combo and smart routing are not yet supported", 403);
+    const path = new URL(request.url).pathname;
+    let vision, inputBound;
+    if (unsupported) {
+      const validated = validateVision(body, path, info);
+      if (hasUnsupportedContent(body, 0, validated.imagePart)) throw new WorkspaceError("Unsupported metered image request", 403);
+      // Count all non-image wire bytes, including JSON escaping, and the fixed low-detail image charge.
+      const encodedUrl = JSON.stringify(validated.url);
+      const urlOffset = raw.indexOf(encodedUrl);
+      if (urlOffset < 0 || raw.indexOf(encodedUrl, urlOffset + encodedUrl.length) >= 0) throw new WorkspaceError("Image URL must use canonical JSON framing", 403);
+      const restBytes = Buffer.byteLength(raw) - Buffer.byteLength(encodedUrl);
+      if (restBytes > MAX_BODY_BYTES) throw new WorkspaceError("Request text exceeds 1 MiB", 413);
+      inputBound = restBytes + INPUT_OVERHEAD_TOKENS + LOW_DETAIL_TOKENS;
+      vision = { url: validated.url, model: "gpt-4o", inputBound };
+    } else {
+      if (Buffer.byteLength(raw) > MAX_BODY_BYTES) throw new WorkspaceError("Text request exceeds 1 MiB", 413);
+      inputBound = Buffer.byteLength(raw) + INPUT_OVERHEAD_TOKENS;
+    }
     const denied = await enforceKeyAccess(await getKeyAccessContext(request), body.model);
     if (denied) return denied;
     for (const field of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) {
       if (body[field] !== undefined && (!Number.isSafeInteger(body[field]) || body[field] < 1)) throw new WorkspaceError(`${field} must be a positive integer`);
     }
-    // Conservative UTF-8 byte bound, not a claim about provider tokenization.
-    const inputBound = Buffer.byteLength(raw) + INPUT_OVERHEAD_TOKENS;
     const budget = await getUserBudget(user.id);
     const requestedOutput = body.max_output_tokens ?? body.max_completion_tokens ?? body.max_tokens ?? user.maxOutputTokens;
     const balances = [
@@ -56,7 +94,6 @@ export async function meterWorkspaceChat(request, dispatch) {
       const [period, source, balance] = limitingBalance;
       throw new WorkspaceError(`Insufficient ${period} token allowance for this request: ${balance.remaining} remaining (${balance.limit} ${source} limit, ${balance.consumed} used, ${balance.reserved} held); at least ${inputBound + 1} required. Reduce request history or increase the ${period} ${source} limit.`, 429);
     }
-    const path = new URL(request.url).pathname;
     const field = path.endsWith("/responses") || path.startsWith("/codex/") ? "max_output_tokens" : body.max_completion_tokens !== undefined ? "max_completion_tokens" : "max_tokens";
     if (output !== null) {
       for (const name of ["max_tokens", "max_completion_tokens", "max_output_tokens"]) delete body[name];
@@ -66,7 +103,7 @@ export async function meterWorkspaceChat(request, dispatch) {
     // With no client output limit, usage-only holds contain the input estimate only.
     reservation = await reserveWorkspaceTokens(key.id, inputBound + (output ?? 0), body.model);
     context = {
-      keyId: key.id, dispatches: 0, usage: null, breakdown: null, outputCap: output,
+      keyId: key.id, dispatches: 0, usage: null, breakdown: null, outputCap: output, ...(vision && { vision }),
       onDispatch() { this.dispatches += 1; },
       onUsage(usage) {
         if (usage?.estimated) return;

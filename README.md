@@ -83,6 +83,23 @@ Under **API keys**, use **Show / copy** to reopen an active key after closing th
 
 Members can open **My workspace → Change password**, enter their current password and confirm a new password of at least 12 characters (at most 72 UTF-8 bytes). A successful change signs that member out on all devices and returns them to the Member sign-in form. API keys, token usage and profile settings are preserved. Failed attempts are rate-limited separately from owner/member sign-in. Forgotten passwords still require an owner reset through **People & quotas → Edit access**.
 
+### Send an image with a member key
+
+Use `/v1/chat/completions` and `openai/gpt-4o` with a first-party OpenAI connection. The member's profile must allow that model. Send **one inline PNG or JPEG per request**, including history. The decoded image must be at most 4 MiB, the remaining prompt at most 1 MiB, and the whole JSON body at most 7 MiB. Text-only requests keep their 1 MiB limit. Remote URLs, file IDs, tools and high-detail images aren't supported. Use a direct connection without provider overrides, outbound proxies or relays. Image requests bypass diagnostic body logging; the workspace usage ledger still records the request. Omit `detail` or set it to `low`; low detail is not intended for reading fine print.
+
+Example using a local PNG (requires Node.js and curl; running this contacts your configured provider):
+
+```sh
+node -e 'const data = require("node:fs").readFileSync(process.argv[1], "base64");
+console.log(JSON.stringify({model:"openai/gpt-4o",max_tokens:100,messages:[{role:"user",content:[
+  {type:"text",text:"Describe this image."},
+  {type:"image_url",image_url:{url:"data:image/png;base64,"+data,detail:"low"}}
+]}]}))' ./image.png | curl --fail-with-body http://localhost:20120/v1/chat/completions \
+  -H "Authorization: Bearer $TOKYARD_API_KEY" -H 'Content-Type: application/json' --data-binary @-
+```
+
+TokYard reserves text and output tokens as usual and adds [85 tokens for the low-detail image](https://developers.openai.com/api/docs/guides/images-vision), not one token per base64 byte. Final usage comes from OpenAI and appears under the member's existing key. `413` means a size limit was exceeded; a policy rejection means to check the route, model, attachment and profile access. An insufficient quota (`429`) is separate from either. Usage only profiles still record usage without imposing a token budget.
+
 ## How allowances work
 
 Owner and member dashboards show **Input tokens**, **Output tokens** and **Total tokens** for each person, both daily and monthly. Input includes cache reads/writes as reported by the provider. The split is stored per request and aggregated across that person’s keys. Historical totals and manual reconciliations without a known split appear as **Unclassified tokens**; missing usage remains held and is excluded from verified consumption. Unclassified tokens are included in the total, so input + output + unclassified = total.
@@ -127,7 +144,7 @@ TokYard uses separate `tokyard_` dashboard, OIDC and MiMo session cookies, so si
 
 - **One process, one instance.** No shared-database replicas, HA or multi-organization tenancy yet.
 - Member keys support text calls to `/v1/chat/completions`, `/v1/messages`, `/v1/responses` and their supported aliases. `GET /v1/models` is available.
-- Member keys cannot use native Gemini endpoints, media, embeddings, search, server-side conversation history, background Responses, combo/fusion/smart routing or separate compaction endpoints.
+- Except for the inline chat image described above, member keys cannot use media inputs or media endpoints. Member keys cannot use native Gemini endpoints, embeddings, search, server-side conversation history, background Responses, combo/fusion/smart routing or separate compaction endpoints.
 - Automatic account failover is disabled after a member request reaches the core handler. Credential retries can still hold the reservation if total usage cannot be proved.
 - Owner **Gateway** keys are privileged and not tied to a member quota. Never distribute them to members. Removing a key or cookie does not enable anonymous local inference.
 - Native SQLite is required for metered inference. The legacy `sql.js` fallback refuses metered calls.

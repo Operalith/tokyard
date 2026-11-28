@@ -92,6 +92,15 @@ try {
   const createKey = async name => (await (await call("/api/workspace/keys", json({ userId: user.id, name }, owner), 201)).json());
   const key = await createKey("First client"), key2 = await createKey("Second client");
   const inference = (token, stream = false, model = "test-model") => ({ method: "POST", headers: { "Content-Type": "application/json", authorization: `Bearer ${token}` }, body: JSON.stringify({ model: `smoke/${model}`, messages: [{ role: "user", content: "Hello" }], max_tokens: 50, stream }) });
+  // Exercise the public rewrite and workspace admission without contacting OpenAI.
+  const imagePrompt = json({ model: "openai/gpt-4o", messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9XkAAAAASUVORK5CYII=" } }] }] });
+  imagePrompt.headers.authorization = `Bearer ${key.key}`;
+  await call("/v1/chat/completions", imagePrompt, 403);
+  await call("/api/workspace/profiles/standard", json({ allowedModels: ["openai/gpt-4o"], dailyTokenLimit: 1 }, owner, "PATCH"));
+  const imageDenied = await call("/v1/chat/completions", imagePrompt, 429);
+  assert.match((await imageDenied.json()).error.message, /daily/i);
+  assert.equal(dispatched, 0);
+  await call("/api/workspace/profiles/standard", json({ allowedModels: ["smoke/test-model", "smoke/no-usage"], dailyTokenLimit: 10000 }, owner, "PATCH"));
   const first = await call("/v1/chat/completions", inference(key.key));
   assert.equal((await first.json()).choices[0].message.content, "Hello");
   const second = await call("/v1/chat/completions", inference(key2.key, true));

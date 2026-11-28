@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, afterEach, test, expect, vi } from "vitest";
 
-vi.mock("@/sse/services/model.js", () => ({ getModelInfo: async model => ({ provider: model === "smart" ? "systemone" : "openai", model }), getComboModels: async model => model === "combo" ? ["openai/test"] : null }));
+vi.mock("@/sse/services/model.js", () => ({ getModelInfo: async model => ({ provider: model === "smart" ? "systemone" : "openai", model: model.startsWith("openai/") ? model.slice(7) : model }), getComboModels: async model => model === "combo" ? ["openai/test"] : null }));
 vi.mock("@/sse/services/keyAccess.js", async () => ({
   extractClientApiKey: request => request.headers.get("authorization")?.slice(7),
   getKeyAccessContext: async () => null, enforceKeyAccess: async () => null,
@@ -272,6 +272,96 @@ test("invalid, multimodal, stateful and smart requests fail before dispatch", as
     const res = await meter(request(key.key, body), dispatch);
     expect(res.status).toBeGreaterThanOrEqual(400);
   }
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 0, reserved: 0 });
+});
+
+const pngUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
+const jpegUrl = "data:image/jpeg;base64,/9j/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/2wBDAQcHBwoIChMKChMoGhYaKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCj/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFAEBAAAAAAAAAAAAAAAAAAAAAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAMAwEAAhEDEQA/AKpAB//Z";
+const imageBody = (url = pngUrl) => ({ model: "openai/gpt-4o", messages: [{ role: "user", content: [{ type: "text", text: "Describe" }, { type: "image_url", image_url: { url, detail: "low" } }] }], max_tokens: 10 });
+
+test("low-detail image reserves text bound plus 85 and settles provider usage", async () => {
+  const original = request(key.key, imageBody());
+  const raw = await original.clone().text();
+  const inputBound = Buffer.byteLength(raw) - Buffer.byteLength(JSON.stringify(pngUrl)) + 2048 + 85;
+  const response = await meter(original, async req => {
+    expect(req.tokyardMeter.vision).toEqual({ url: pngUrl, model: "gpt-4o", inputBound });
+    expect((await w.getUserBudget(user.id)).reserved).toBe(inputBound + 10);
+    expect((await req.json()).messages[0].content[1].image_url.url).toBe(pngUrl);
+    req.tokyardMeter.onDispatch();
+    req.tokyardMeter.onUsage({ prompt_tokens: 100, completion_tokens: 3 });
+    return Response.json({});
+  });
+  expect(response.status).toBe(200);
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 103, reserved: 0 });
+});
+
+test("usage-only accepts a 4 MiB image, normalizes missing detail, and settles through direct transport", async () => {
+  await w.saveProfile({ usageOnly: true, tokenLimit: 0 }, "standard");
+  const bytes = Buffer.alloc(4 * 1024 * 1024);
+  Buffer.from(pngUrl.split(",")[1], "base64").copy(bytes);
+  const body = imageBody(`data:image/png;base64,${bytes.toString("base64")}`);
+  delete body.max_tokens;
+  delete body.messages[0].content[1].image_url.detail;
+  const { dispatchMeteredVision } = await import("@/sse/handlers/meteredVision.js");
+  const transport = vi.fn(async (_url, opts) => {
+    const sent = JSON.parse(opts.body);
+    expect(sent.messages[0].content[1].image_url.detail).toBe("low");
+    expect(sent).not.toHaveProperty("max_tokens");
+    return Response.json({ usage: { prompt_tokens: 98, completion_tokens: 2 } });
+  });
+  const dispatch = async req => dispatchMeteredVision({ body: await req.json(), meter: req.tokyardMeter, credentials: { apiKey: "fixture" }, transport });
+  for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"]) vi.stubEnv(name, "");
+  try {
+    expect((await meter(request(key.key, body), dispatch)).status).toBe(200);
+    expect(await w.getUserBudget(user.id)).toMatchObject({ inputTokens: 98, outputTokens: 2, reserved: 0 });
+    const tooBig = `data:image/png;base64,${Buffer.concat([bytes, Buffer.alloc(1)]).toString("base64")}`;
+    expect((await meter(request(key.key, imageBody(tooBig)), dispatch)).status).toBe(413);
+    expect(transport).toHaveBeenCalledOnce();
+  } finally { vi.unstubAllEnvs(); }
+});
+
+test("JPEG missing usage remains held and insufficient balance blocks admission", async () => {
+  const response = await meter(request(key.key, imageBody(jpegUrl)), async req => {
+    expect(req.tokyardMeter.vision.url).toBe(jpegUrl);
+    req.tokyardMeter.onDispatch();
+    return Response.json({});
+  });
+  expect(response.status).toBe(200);
+  expect((await w.listWorkspaceRequests(user.id))[0].status).toBe("uncertain");
+  expect((await w.getUserBudget(user.id)).reserved).toBeGreaterThan(85);
+  await w.updateWorkspaceUser(user.id, { tokenLimit: 0 });
+  const dispatch = vi.fn();
+  expect((await meter(request(key.key, imageBody(jpegUrl)), dispatch)).status).toBe(429);
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+test("unsupported image shapes, models, endpoints and framing never reserve", async () => {
+  const invalid = [
+    { ...imageBody(), model: "openai/gpt-4o-mini" },
+    { ...imageBody(), messages: [{ role: "assistant", content: imageBody().messages[0].content }] },
+    { ...imageBody(), messages: [{ role: "user", content: [...imageBody().messages[0].content, imageBody().messages[0].content[1]] }] },
+    imageBody("https://example.com/image.png"), imageBody(pngUrl.replace("image/png", "image/jpeg")),
+    imageBody(pngUrl + "A"), { ...imageBody(), tools: [] },
+    { ...imageBody(), messages: [{ role: "user", content: [{ type: "image_url", image_url: { url: pngUrl, detail: "high" } }] }] },
+  ];
+  const dispatch = vi.fn();
+  for (const body of invalid) expect((await meter(request(key.key, body), dispatch)).status).toBeGreaterThanOrEqual(400);
+  expect((await meter(request(key.key, imageBody(), "/v1/responses"), dispatch)).status).toBe(403);
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 0, reserved: 0 });
+});
+
+test("bounded wire, non-image bytes and encoding fail before reservation", async () => {
+  const dispatch = vi.fn();
+  const huge = request(key.key, { messages: [{ role: "user", content: "x".repeat(7 * 1024 * 1024) }] });
+  expect((await meter(huge, dispatch)).status).toBe(413);
+  const extra = imageBody();
+  extra.messages[0].content[0].text = "x".repeat(1024 * 1024);
+  expect((await meter(request(key.key, extra), dispatch)).status).toBe(413);
+  const compressed = request(key.key, imageBody());
+  compressed.headers.set("content-encoding", "gzip");
+  expect((await meter(compressed, dispatch)).status).toBe(415);
   expect(dispatch).not.toHaveBeenCalled();
   expect(await w.getUserBudget(user.id)).toMatchObject({ consumed: 0, reserved: 0 });
 });

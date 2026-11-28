@@ -59,7 +59,7 @@ function AllowedModels({ initialModels = [] }) {
   return <fieldset className="yard-model-picker">
     <legend>Allowed models</legend>
     <label className="yard-model-option"><input ref={mode} type="checkbox" checked={all} onChange={e => setAll(e.target.checked)}/><span>Allow all direct text models</span></label>
-    <small>Uncheck to choose models from your active connections.</small>
+    <small>Uncheck to choose models from your active connections. Members can also send one inline PNG or JPEG to openai/gpt-4o when allowed (Chat Completions, low detail, up to 4 MiB).</small>
     {!all && <>
       <div className="yard-model-toolbar"><label className="yard-field"><span className="sr-only">Search available models</span><input type="search" placeholder="Search model or provider…" value={query} onChange={e => setQuery(e.target.value)}/></label><small role="status">{selected.length} / 200 selected</small></div>
       {error ? <div role="alert"><p>Could not load available models. Saved selections are preserved.</p><button type="button" className="yard-text-button" onClick={() => setRetry(n => n + 1)}>Retry loading models</button></div> : groups === null && <p role="status">Loading available models…</p>}

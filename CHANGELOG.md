@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Allow workspace members to send one inline, low-detail PNG or JPEG to direct OpenAI GPT-4o via Chat Completions. Existing keys, per-person usage tracking and quota policies apply; no schema migration.
+
 ## 0.1.0-alpha.5 — 2026-11-28
 
 - Fix key copying when the Clipboard API is unavailable or denied. Use a dialog-safe selection fallback and report success only after copying succeeds; keep manual-copy errors visible inside the key dialog.
