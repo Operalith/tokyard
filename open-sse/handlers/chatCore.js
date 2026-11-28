@@ -408,6 +408,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
       log,
       proxyOptions,
       providerOverrides,
+      workspaceMetered: Boolean(onDispatch),
     });
     providerResponse = result.response;
     providerUrl = result.url;
@@ -478,6 +479,7 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
             log,
             proxyOptions,
             providerOverrides,
+            workspaceMetered: Boolean(onDispatch),
           });
           if (retryResult.response.ok) {
             providerResponse = retryResult.response;
