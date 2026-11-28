@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Sync gateway, model catalogs, provider integrations, and dependency updates with 9Router v0.5.123 (upstream commit `5ae63d2`).
+- Workspace keys keep single-request accounting. Gemini Hydrogen uses a single generation hop, and Kiro keeps its existing transport for workspace keys.
+
 ## 0.1.0-alpha.5 — 2026-11-28
 
 - Fix key copying when the Clipboard API is unavailable or denied. Use a dialog-safe selection fallback and report success only after copying succeeds; keep manual-copy errors visible inside the key dialog.
